@@ -1,4 +1,4 @@
-```markdown
+
 <div align="center">
 
 # 🧠 Smart Switch Brain
