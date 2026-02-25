@@ -1,12 +1,13 @@
+```bash
 #!/bin/bash
 set -euo pipefail
 
 # =============================================================================
-# Smart Switch Brain — OpenClaw AI Mode Selector Installer v1.0.2
+# Smart Switch Brain — OpenClaw AI Mode Selector Installer v1.1.0
 # Created by Boy Barley — https://github.com/boybarley
 # =============================================================================
 
-readonly SCRIPT_VERSION="1.0.2"
+readonly SCRIPT_VERSION="1.1.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 readonly DEFAULT_REPO="https://github.com/boybarley/smart-switch-brain.git"
@@ -71,7 +72,6 @@ init_logging() {
   ERROR_LOG="${log_dir}/install_error_${TIMESTAMP}.log"
   touch "$LOG_FILE" "$ERROR_LOG" 2>/dev/null || true
   chmod 600 "$LOG_FILE" "$ERROR_LOG" 2>/dev/null || true
-  # Rotate old logs safely
   local count=0
   for f in $(ls -1t "${log_dir}"/install_*.log 2>/dev/null || true); do
     [[ -f "$f" ]] || continue
@@ -93,9 +93,9 @@ log() {
 }
 
 info()    { printf "%s %b%s%b\n" "ℹ️"  "$CYAN"   "$*" "$RESET"; log "INFO" "$*"; }
-success() { printf "%s %b%s%b\n" "✅"  "$GREEN"  "$*" "$RESET"; log "OK"   "$*"; }
+success() { printf "%s %b%s%b\n" "✅" "$GREEN"  "$*" "$RESET"; log "OK"   "$*"; }
 warn()    { printf "%s %b%s%b\n" "⚠️"  "$YELLOW" "$*" "$RESET"; log "WARN" "$*"; }
-error()   { printf "%s %b%s%b\n" "❌"  "$RED"    "$*" "$RESET"; log "ERROR" "$*"; }
+error()   { printf "%s %b%s%b\n" "❌" "$RED"    "$*" "$RESET"; log "ERROR" "$*"; }
 step()    { printf "\n%b%b── %s%b\n" "$BOLD" "$BLUE" "$*" "$RESET"; log "STEP" "$*"; }
 verbose() { if [[ "$VERBOSE" == true ]]; then info "$@"; else log "DEBUG" "$*"; fi; }
 
@@ -215,7 +215,7 @@ secure_read() {
 sanitize_input() { echo "$1" | tr -cd '[:alnum:]._:/@-'; }
 
 # =============================================================================
-# CLI Parsing
+# CLI
 # =============================================================================
 
 parse_args() {
@@ -271,7 +271,6 @@ EOF
 detect_os() {
   step "Detecting operating system"
   if [[ -f /etc/os-release ]]; then
-    # shellcheck source=/dev/null
     source /etc/os-release 2>/dev/null || true
     case "${ID:-unknown}" in
       ubuntu|debian|linuxmint|pop) OS_TYPE="debian"; PKG_MANAGER="apt" ;;
@@ -308,8 +307,7 @@ check_ram() {
     ram_mb=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0)
   fi
   if [[ "$ram_mb" -lt "$MIN_RAM_MB" ]]; then
-    error "RAM: ${ram_mb}MB < ${MIN_RAM_MB}MB required"
-    return 1
+    error "RAM: ${ram_mb}MB < ${MIN_RAM_MB}MB required"; return 1
   fi
   success "RAM: ${ram_mb}MB"
 }
@@ -326,8 +324,7 @@ check_disk() {
   fi
   avail_mb="${avail_mb:-0}"
   if [[ "$avail_mb" -lt "$MIN_DISK_MB" ]]; then
-    error "Disk: ${avail_mb}MB < ${MIN_DISK_MB}MB required"
-    return 1
+    error "Disk: ${avail_mb}MB < ${MIN_DISK_MB}MB required"; return 1
   fi
   success "Disk: ${avail_mb}MB free"
 }
@@ -335,19 +332,16 @@ check_disk() {
 check_tool_version() {
   local tool="$1" min_ver="$2" flag="${3:---version}"
   if ! command_exists "$tool"; then
-    error "$tool not installed"
-    return 1
+    error "$tool not installed"; return 1
   fi
   local raw current
   raw="$("$tool" "$flag" 2>&1 | head -1 || true)"
   current="$(echo "$raw" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1 || true)"
   if [[ -z "$current" ]]; then
-    warn "Cannot determine $tool version — proceeding"
-    return 0
+    warn "Cannot determine $tool version"; return 0
   fi
   if ! version_gte "$current" "$min_ver"; then
-    error "$tool $current < $min_ver"
-    return 1
+    error "$tool $current < $min_ver"; return 1
   fi
   success "$tool: v${current}"
 }
@@ -355,11 +349,11 @@ check_tool_version() {
 validate_prereqs() {
   step "Validating system requirements"
   local failed=false
-  check_ram                                                      || failed=true
-  check_disk                                                     || failed=true
-  check_tool_version node "${MIN_NODE_MAJOR}.0.0" "--version"    || failed=true
-  check_tool_version npm  "${MIN_NPM_MAJOR}.0.0"  "--version"   || failed=true
-  check_tool_version git  "$MIN_GIT_VERSION"       "--version"   || failed=true
+  check_ram                                                    || failed=true
+  check_disk                                                   || failed=true
+  check_tool_version node "${MIN_NODE_MAJOR}.0.0" "--version"  || failed=true
+  check_tool_version npm  "${MIN_NPM_MAJOR}.0.0"  "--version" || failed=true
+  check_tool_version git  "$MIN_GIT_VERSION"       "--version" || failed=true
   if [[ "$failed" == true ]]; then
     error "Prerequisites not met. Fix above issues and retry."
     exit 1
@@ -367,8 +361,66 @@ validate_prereqs() {
 }
 
 # =============================================================================
-# Dependencies
+# Dependencies — FIX #5: build-essential + python3
 # =============================================================================
+
+install_dependencies() {
+  step "Installing base dependencies"
+  for dep in curl wget git; do
+    if ! command_exists "$dep"; then
+      retry pkg_install "$dep" || { error "Failed to install $dep"; exit 1; }
+    else
+      success "$dep OK"
+    fi
+  done
+  # Optional sqlite3
+  if ! command_exists sqlite3; then
+    pkg_install sqlite3 2>/dev/null || verbose "sqlite3 not available (optional)"
+  fi
+
+  # FIX #5: Build tools for native modules (better-sqlite3 needs node-gyp)
+  step "Installing build tools for native modules"
+  case "$PKG_MANAGER" in
+    apt)
+      info "Installing build-essential python3..."
+      sudo apt-get update -qq 2>>"${ERROR_LOG:-/dev/null}" || true
+      sudo apt-get install -y build-essential python3 2>>"${ERROR_LOG:-/dev/null}" || {
+        warn "build-essential install failed — native modules may not compile"
+      }
+      ;;
+    yum|dnf)
+      info "Installing Development Tools + python3..."
+      sudo "$PKG_MANAGER" groupinstall -y "Development Tools" 2>>"${ERROR_LOG:-/dev/null}" || true
+      sudo "$PKG_MANAGER" install -y python3 gcc-c++ make 2>>"${ERROR_LOG:-/dev/null}" || {
+        warn "Build tools install failed"
+      }
+      ;;
+    pacman)
+      info "Installing base-devel python..."
+      sudo pacman -S --noconfirm --needed base-devel python 2>>"${ERROR_LOG:-/dev/null}" || {
+        warn "Build tools install failed"
+      }
+      ;;
+    brew)
+      info "Checking Xcode CLI tools..."
+      xcode-select -p &>/dev/null || {
+        info "Installing Xcode CLI tools (may open a dialog)..."
+        xcode-select --install 2>/dev/null || true
+        warn "If prompted, accept the Xcode license and re-run installer"
+      }
+      ;;
+    *)
+      warn "Cannot auto-install build tools for this system"
+      ;;
+  esac
+  if command_exists gcc && command_exists make && command_exists python3; then
+    success "Build tools: gcc, make, python3 OK"
+  elif command_exists gcc && command_exists make; then
+    success "Build tools: gcc, make OK (python3 missing but may not be needed)"
+  else
+    warn "Build tools incomplete — better-sqlite3 will try prebuilt binaries"
+  fi
+}
 
 pkg_install() {
   local pkg="$1"
@@ -381,21 +433,6 @@ pkg_install() {
     brew)    brew install "$pkg" ;;
     *)       warn "Cannot auto-install $pkg"; return 1 ;;
   esac
-}
-
-install_dependencies() {
-  step "Checking dependencies"
-  for dep in curl wget git; do
-    if ! command_exists "$dep"; then
-      retry pkg_install "$dep" || { error "Failed to install $dep"; exit 1; }
-    else
-      success "$dep OK"
-    fi
-  done
-  # Optional: sqlite3 for database init
-  if ! command_exists sqlite3; then
-    pkg_install sqlite3 2>/dev/null || verbose "sqlite3 not available (optional)"
-  fi
 }
 
 # =============================================================================
@@ -442,18 +479,15 @@ manage_repository() {
       mkdir -p "$INSTALL_DIR"
     fi
   fi
-  # Verify integrity if git repo
   if [[ -d "${INSTALL_DIR}/.git" ]]; then
     if (cd "$INSTALL_DIR" && git fsck --no-dangling --quiet 2>/dev/null); then
       verbose "Repo integrity OK"
-    else
-      warn "Repo integrity issues found"
     fi
   fi
 }
 
 # =============================================================================
-# Directories
+# Directories — FIX #4: all dirs created here + in backend at runtime
 # =============================================================================
 
 create_directories() {
@@ -482,10 +516,16 @@ setup_env() {
   local env_file="${INSTALL_DIR}/.env"
   if [[ -f "$env_file" ]]; then
     info "Existing .env found — keeping"
+    # FIX #1: ensure INSTALL_DIR is in .env for path resolution
+    if ! grep -q "^INSTALL_DIR=" "$env_file" 2>/dev/null; then
+      echo "" >> "$env_file"
+      echo "# Added by installer v${SCRIPT_VERSION}" >> "$env_file"
+      echo "INSTALL_DIR=${INSTALL_DIR}" >> "$env_file"
+      verbose "Added INSTALL_DIR to existing .env"
+    fi
     return 0
   fi
   info "Generating .env..."
-  # Get API key if not provided via flag
   if [[ -z "$API_KEY" ]]; then
     if [[ -t 0 ]]; then
       echo ""
@@ -506,16 +546,27 @@ setup_env() {
   fi
   cat > "$env_file" <<ENVEOF
 # Smart Switch Brain — Generated $(date -u '+%Y-%m-%dT%H:%M:%SZ')
-# DO NOT COMMIT
+# DO NOT COMMIT THIS FILE
 
 NODE_ENV=production
 PORT=${PORT}
 HOST=0.0.0.0
+
+# Installation path (used by backend for absolute path resolution)
+INSTALL_DIR=${INSTALL_DIR}
+
+# OpenRouter API
 OPENROUTER_API_KEY=${API_KEY}
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+
+# Database
 DATABASE_PATH=./data/smartswitch.db
+
+# Logging
 LOG_LEVEL=info
 LOG_DIR=./logs
+
+# Rate Limiting
 RATE_LIMIT_WINDOW_MS=60000
 RATE_LIMIT_MAX_REQUESTS=100
 ENVEOF
@@ -532,6 +583,8 @@ generate_modes_yaml() {
   fi
   cat > "$mf" <<'YAMLEOF'
 # Smart Switch Brain — AI Routing Modes
+# Edit freely — installer will never overwrite without backup.
+
 modes:
   - id: work-hard
     name: "Work Hard"
@@ -585,7 +638,7 @@ setup_configuration() {
 }
 
 # =============================================================================
-# Backend
+# Backend — FIX #1 path resolution, FIX #2 modes error handling, FIX #4 auto-mkdir
 # =============================================================================
 
 generate_backend_scaffold() {
@@ -595,7 +648,7 @@ generate_backend_scaffold() {
   cat > "${be}/package.json" <<'PKG'
 {
   "name": "smart-switch-brain-backend",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
@@ -615,19 +668,98 @@ generate_backend_scaffold() {
 }
 PKG
   mkdir -p "${be}/src"
+  # ── index.js: all fixes applied ──
   cat > "${be}/src/index.js" <<'SERVERJS'
-require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
+'use strict';
+
+var path = require('path');
+var fs = require('fs');
+
+// ============================================================
+// FIX #1: Absolute path resolution
+// Primary: process.env.INSTALL_DIR (set by .env or systemd)
+// Fallback: two levels up from this file (__dirname/../../)
+// Last resort: /root/smart-switch-brain
+// ============================================================
+var ROOT_DIR = process.env.INSTALL_DIR
+  || path.resolve(__dirname, '..', '..')
+  || '/root/smart-switch-brain';
+
+// Load .env from the project root
+require('dotenv').config({ path: path.join(ROOT_DIR, '.env') });
+
 var express = require('express');
 var helmet = require('helmet');
 var cors = require('cors');
 var rateLimit = require('express-rate-limit');
-var fs = require('fs');
-var path = require('path');
 var yaml = require('yaml');
 var Database = require('better-sqlite3');
 
 var PORT = process.env.PORT || 5000;
 var HOST = process.env.HOST || '0.0.0.0';
+
+// ============================================================
+// FIX #4: Auto-create directories before anything uses them
+// ============================================================
+var CONFIG_DIR = path.join(ROOT_DIR, 'config');
+var DATA_DIR = path.join(ROOT_DIR, 'data');
+var LOG_DIR = path.join(ROOT_DIR, 'logs');
+
+[DATA_DIR, LOG_DIR, CONFIG_DIR].forEach(function(dir) {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log('[SSB] Created directory: ' + dir);
+  }
+});
+
+// ============================================================
+// FIX #2: Modes.yaml — detailed error handling and logging
+// ============================================================
+var modesPath = path.join(CONFIG_DIR, 'modes.yaml');
+var modes = { modes: [], defaults: { fallback_mode: 'focus-serius' } };
+
+console.log('[SSB] Looking for modes.yaml at: ' + modesPath);
+
+if (!fs.existsSync(modesPath)) {
+  console.error('[SSB] ERROR: modes.yaml NOT FOUND at: ' + modesPath);
+  console.error('[SSB] Working directory: ' + process.cwd());
+  console.error('[SSB] ROOT_DIR resolved to: ' + ROOT_DIR);
+  console.error('[SSB] Hint: ensure INSTALL_DIR is set in .env or environment');
+} else {
+  try {
+    var rawYaml = fs.readFileSync(modesPath, 'utf8');
+    var parsed = yaml.parse(rawYaml);
+    if (parsed && parsed.modes && Array.isArray(parsed.modes)) {
+      modes = parsed;
+      console.log('[SSB] Loaded ' + modes.modes.length + ' mode(s) from ' + modesPath);
+      modes.modes.forEach(function(m) {
+        console.log('[SSB]   - ' + m.id + ': ' + m.name + ' (' + m.model + ')');
+      });
+    } else {
+      console.error('[SSB] ERROR: modes.yaml parsed but has no valid "modes" array');
+      console.error('[SSB] Parsed content keys: ' + Object.keys(parsed || {}).join(', '));
+    }
+  } catch (parseErr) {
+    console.error('[SSB] ERROR parsing modes.yaml: ' + parseErr.message);
+    console.error('[SSB] File path: ' + modesPath);
+    console.error('[SSB] Check YAML syntax at https://yamlchecker.com');
+  }
+}
+
+// ============================================================
+// Database — with auto-created DATA_DIR from FIX #4
+// ============================================================
+var dbPath = path.join(DATA_DIR, 'smartswitch.db');
+console.log('[SSB] Database path: ' + dbPath);
+
+var db = new Database(dbPath);
+db.pragma('journal_mode = WAL');
+db.exec('CREATE TABLE IF NOT EXISTS mode_history (id INTEGER PRIMARY KEY AUTOINCREMENT, mode_id TEXT NOT NULL, switched_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
+db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
+
+// ============================================================
+// Express app
+// ============================================================
 var app = express();
 
 app.use(helmet());
@@ -638,47 +770,73 @@ app.use(rateLimit({
   max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100')
 }));
 
-var distPath = path.resolve(__dirname, '../../frontend/dist');
-if (fs.existsSync(distPath)) app.use(express.static(distPath));
+// Serve frontend
+var distPath = path.join(ROOT_DIR, 'frontend', 'dist');
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  console.log('[SSB] Serving frontend from: ' + distPath);
+} else {
+  console.warn('[SSB] Frontend dist not found at: ' + distPath);
+}
 
-var modesPath = path.resolve(__dirname, '../../config/modes.yaml');
-var dbPath = path.resolve(__dirname, process.env.DATABASE_PATH || '../../data/smartswitch.db');
-
-var modes = { modes: [], defaults: {} };
-try { modes = yaml.parse(fs.readFileSync(modesPath, 'utf8')); } catch (e) { console.error('modes.yaml:', e.message); }
-
-var db = new Database(dbPath);
-db.pragma('journal_mode = WAL');
-db.exec('CREATE TABLE IF NOT EXISTS mode_history (id INTEGER PRIMARY KEY AUTOINCREMENT, mode_id TEXT NOT NULL, switched_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
-db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
-
+// Routes
 app.get('/health', function(req, res) {
-  res.json({ status: 'ok', version: '1.0.0', uptime: process.uptime() });
+  res.json({
+    status: 'ok',
+    version: '1.1.0',
+    uptime: process.uptime(),
+    root_dir: ROOT_DIR,
+    modes_loaded: (modes.modes || []).length,
+    db_path: dbPath
+  });
 });
 
-app.get('/api/modes', function(req, res) { res.json(modes); });
+app.get('/api/modes', function(req, res) {
+  res.json(modes);
+});
 
 app.get('/api/modes/current', function(req, res) {
   var row = db.prepare('SELECT mode_id FROM mode_history ORDER BY switched_at DESC LIMIT 1').get();
-  var current = row ? row.mode_id : (modes.defaults && modes.defaults.fallback_mode) || 'focus-serius';
-  var mode = (modes.modes || []).find(function(m) { return m.id === current; }) || {};
-  res.json(Object.assign({ current: current }, mode));
+  var currentId = row ? row.mode_id : (modes.defaults && modes.defaults.fallback_mode) || 'focus-serius';
+  var mode = (modes.modes || []).find(function(m) { return m.id === currentId; }) || {};
+  res.json(Object.assign({ current: currentId }, mode));
 });
 
 app.post('/api/modes/switch', function(req, res) {
   var mode_id = req.body && req.body.mode_id;
   if (!mode_id) return res.status(400).json({ error: 'mode_id required' });
   var valid = (modes.modes || []).find(function(m) { return m.id === mode_id; });
-  if (!valid) return res.status(400).json({ error: 'invalid mode_id' });
+  if (!valid) return res.status(400).json({ error: 'invalid mode_id', available: (modes.modes || []).map(function(m) { return m.id; }) });
   db.prepare('INSERT INTO mode_history (mode_id) VALUES (?)').run(mode_id);
+  console.log('[SSB] Mode switched to: ' + mode_id);
   res.json({ switched: mode_id, timestamp: new Date().toISOString() });
 });
 
+// Catch-all: serve frontend index for SPA routing
+app.get('*', function(req, res) {
+  var indexPath = path.join(distPath, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.status(404).json({ error: 'not found' });
+  }
+});
+
 app.listen(PORT, HOST, function() {
-  console.log('Smart Switch Brain running on ' + HOST + ':' + PORT);
+  console.log('');
+  console.log('========================================');
+  console.log('  Smart Switch Brain v1.1.0');
+  console.log('  Created by Boy Barley');
+  console.log('========================================');
+  console.log('  URL:      http://' + HOST + ':' + PORT);
+  console.log('  Root:     ' + ROOT_DIR);
+  console.log('  Database: ' + dbPath);
+  console.log('  Modes:    ' + (modes.modes || []).length + ' loaded');
+  console.log('========================================');
+  console.log('');
 });
 SERVERJS
-  success "Backend scaffold created"
+  success "Backend scaffold created (with path resolution + error handling)"
 }
 
 setup_backend() {
@@ -686,8 +844,7 @@ setup_backend() {
   generate_backend_scaffold
   local be="${INSTALL_DIR}/backend"
   if [[ ! -f "${be}/package.json" ]]; then
-    error "Backend package.json missing"
-    exit 1
+    error "Backend package.json missing"; exit 1
   fi
   spinner_start "Installing backend dependencies..."
   if (cd "$be" && retry npm install --production --loglevel=warn 2>>"${ERROR_LOG:-/dev/null}"); then
@@ -696,6 +853,7 @@ setup_backend() {
   else
     spinner_stop
     error "Backend npm install failed"
+    error "Tip: ensure build-essential and python3 are installed"
     exit 1
   fi
   # Audit
@@ -720,7 +878,7 @@ LREOF
 }
 
 # =============================================================================
-# Frontend
+# Frontend — FIX #6: full HTML, timeout, error handling, debug logging
 # =============================================================================
 
 generate_frontend_scaffold() {
@@ -730,44 +888,387 @@ generate_frontend_scaffold() {
   cat > "${fe}/package.json" <<'FEPKG'
 {
   "name": "smart-switch-brain-frontend",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "scripts": {
-    "build": "mkdir -p dist && cp -r public/* dist/ 2>/dev/null; echo done"
+    "build": "mkdir -p dist && cp -r public/* dist/ 2>/dev/null; echo build-done"
   }
 }
 FEPKG
   mkdir -p "${fe}/public" "${fe}/dist"
+
+  # ── Full readable HTML with proper error handling ──
   cat > "${fe}/public/index.html" <<'FEHTML'
 <!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Smart Switch Brain</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,sans-serif;background:#0f1117;color:#e1e4e8;display:flex;align-items:center;justify-content:center;min-height:100vh}
-.c{text-align:center;max-width:600px;padding:2rem}.t{font-size:2rem;margin-bottom:1rem}
-.m{display:flex;gap:1rem;flex-wrap:wrap;justify-content:center;margin-top:2rem}
-.b{padding:1.5rem 2rem;border:2px solid #30363d;border-radius:12px;background:#161b22;cursor:pointer;transition:all .2s;min-width:150px;color:#e1e4e8}
-.b:hover{border-color:#58a6ff;transform:translateY(-2px)}.b.a{border-color:#3fb950;box-shadow:0 0 12px rgba(63,185,80,.3)}
-.i{font-size:2rem}.l{margin-top:.5rem;font-size:.9rem;color:#8b949e}
-.s{margin-top:2rem;padding:1rem;border-radius:8px;background:#161b22;color:#58a6ff}
-.f{margin-top:2rem;font-size:.75rem;color:#484f58}
-</style></head>
-<body><div class="c"><h1 class="t">🧠 Smart Switch Brain</h1><p>OpenClaw AI Mode Selector</p>
-<div class="m" id="m"></div><div class="s" id="s">Loading...</div>
-<div class="f">Created by Boy Barley</div></div>
-<script>
-var A=window.location.origin;
-function ld(){fetch(A+'/api/modes').then(function(r){return r.json()}).then(function(d){
-var h='';(d.modes||[]).forEach(function(x){h+='<div class="b" id="b-'+x.id+'" onclick="sw(\''+x.id+'\')"><div class="i">'+(x.icon||'🔘')+'</div><div class="l">'+x.name+'</div></div>'});
-document.getElementById('m').innerHTML=h;return fetch(A+'/api/modes/current')}).then(function(r){return r.json()}).then(function(c){
-document.getElementById('s').textContent='Current: '+(c.name||c.current);
-var el=document.getElementById('b-'+c.current);if(el)el.className='b a'}).catch(function(){document.getElementById('s').textContent='API unavailable'})}
-function sw(id){fetch(A+'/api/modes/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode_id:id})}).then(function(){ld()})}
-ld();
-</script></body></html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Switch Brain — OpenClaw AI Mode Selector</title>
+  <style>
+    :root {
+      --bg-primary: #0f1117;
+      --bg-card: #161b22;
+      --bg-hover: #1c2333;
+      --border: #30363d;
+      --text-primary: #e1e4e8;
+      --text-secondary: #8b949e;
+      --accent-blue: #58a6ff;
+      --accent-green: #3fb950;
+      --accent-red: #f85149;
+      --accent-yellow: #d29922;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .container {
+      text-align: center;
+      max-width: 700px;
+      width: 100%;
+      padding: 2rem;
+    }
+
+    .title {
+      font-size: 2.2rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      color: var(--text-secondary);
+      font-size: 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .modes {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      margin-bottom: 2rem;
+    }
+
+    .mode-btn {
+      padding: 1.5rem 1.8rem;
+      border: 2px solid var(--border);
+      border-radius: 14px;
+      background: var(--bg-card);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      min-width: 170px;
+      max-width: 200px;
+      flex: 1;
+      color: var(--text-primary);
+    }
+
+    .mode-btn:hover {
+      border-color: var(--accent-blue);
+      background: var(--bg-hover);
+      transform: translateY(-3px);
+      box-shadow: 0 4px 20px rgba(88, 166, 255, 0.15);
+    }
+
+    .mode-btn.active {
+      border-color: var(--accent-green);
+      box-shadow: 0 0 20px rgba(63, 185, 80, 0.25);
+    }
+
+    .mode-btn .icon {
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .mode-btn .name {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 0.3rem;
+    }
+
+    .mode-btn .desc {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+      line-height: 1.3;
+    }
+
+    .status {
+      padding: 1rem 1.5rem;
+      border-radius: 10px;
+      background: var(--bg-card);
+      color: var(--accent-blue);
+      font-size: 0.95rem;
+      border: 1px solid var(--border);
+      margin-bottom: 1.5rem;
+    }
+
+    .status.error {
+      color: var(--accent-red);
+      border-color: var(--accent-red);
+    }
+
+    .status.success {
+      color: var(--accent-green);
+      border-color: var(--accent-green);
+    }
+
+    .status.switching {
+      color: var(--accent-yellow);
+    }
+
+    .error-box {
+      padding: 2rem;
+      border: 1px solid var(--accent-red);
+      border-radius: 10px;
+      background: var(--bg-card);
+      color: var(--text-primary);
+    }
+
+    .error-box p {
+      margin-bottom: 0.5rem;
+    }
+
+    .error-box .detail {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      font-family: monospace;
+    }
+
+    .error-box button {
+      margin-top: 1rem;
+      padding: 0.6rem 1.5rem;
+      border: 1px solid var(--accent-blue);
+      background: transparent;
+      color: var(--accent-blue);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+
+    .error-box button:hover {
+      background: var(--accent-blue);
+      color: #fff;
+    }
+
+    .loading-spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent-blue);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .footer {
+      margin-top: 1rem;
+      font-size: 0.75rem;
+      color: #484f58;
+    }
+
+    .footer a {
+      color: #484f58;
+      text-decoration: none;
+    }
+
+    .footer a:hover {
+      color: var(--accent-blue);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1 class="title">🧠 Smart Switch Brain</h1>
+    <p class="subtitle">OpenClaw AI Mode Selector</p>
+
+    <div id="modes" class="modes">
+      <div style="color: var(--text-secondary);">
+        <span class="loading-spinner"></span>
+        Loading modes...
+      </div>
+    </div>
+
+    <div id="status" class="status">
+      <span class="loading-spinner"></span>
+      Connecting to API...
+    </div>
+
+    <div class="footer">
+      Created by <a href="https://github.com/boybarley" target="_blank">Boy Barley</a>
+      &nbsp;·&nbsp; Smart Switch Brain v1.1.0
+    </div>
+  </div>
+
+  <script>
+    /* ================================================================
+     * Smart Switch Brain — Frontend v1.1.0
+     * FIX #6: Timeout, error handling, console logging, full HTML
+     * ================================================================ */
+
+    var API_BASE = window.location.origin;
+    var REQUEST_TIMEOUT = 5000;
+
+    /* -- Helpers -- */
+
+    function fetchWithTimeout(url, options) {
+      console.log('[SSB] Fetch: ' + url);
+      return new Promise(function(resolve, reject) {
+        var timer = setTimeout(function() {
+          console.error('[SSB] Timeout after ' + REQUEST_TIMEOUT + 'ms: ' + url);
+          reject(new Error('Timeout after ' + REQUEST_TIMEOUT + 'ms'));
+        }, REQUEST_TIMEOUT);
+
+        fetch(url, options || {})
+          .then(function(response) {
+            clearTimeout(timer);
+            console.log('[SSB] Response: ' + response.status + ' from ' + url);
+            resolve(response);
+          })
+          .catch(function(err) {
+            clearTimeout(timer);
+            console.error('[SSB] Network error: ' + err.message);
+            reject(err);
+          });
+      });
+    }
+
+    function setStatus(msg, type) {
+      var el = document.getElementById('status');
+      el.className = 'status' + (type ? ' ' + type : '');
+      el.textContent = msg;
+      console.log('[SSB] Status: ' + msg);
+    }
+
+    /* -- Load modes from API -- */
+
+    function loadModes() {
+      console.log('[SSB] Loading modes...');
+
+      fetchWithTimeout(API_BASE + '/api/modes')
+        .then(function(res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+          return res.json();
+        })
+        .then(function(data) {
+          var modeList = data.modes || [];
+          console.log('[SSB] Received ' + modeList.length + ' mode(s)');
+
+          if (modeList.length === 0) {
+            setStatus('No modes configured — check config/modes.yaml', 'error');
+            return;
+          }
+
+          renderModes(modeList);
+          return fetchWithTimeout(API_BASE + '/api/modes/current');
+        })
+        .then(function(res) {
+          if (!res) return;
+          return res.json();
+        })
+        .then(function(current) {
+          if (!current) return;
+          console.log('[SSB] Current mode: ' + (current.name || current.current));
+          setStatus('Active: ' + (current.name || current.current), 'success');
+          highlightActive(current.current);
+        })
+        .catch(function(err) {
+          console.error('[SSB] Load failed:', err);
+          setStatus('Cannot connect: ' + err.message, 'error');
+
+          var modesEl = document.getElementById('modes');
+          modesEl.innerHTML = ''
+            + '<div class="error-box">'
+            + '  <p><strong>Could not load modes</strong></p>'
+            + '  <p class="detail">API: ' + API_BASE + '/api/modes</p>'
+            + '  <p class="detail">Error: ' + err.message + '</p>'
+            + '  <p class="detail">Check: is the backend running?</p>'
+            + '  <br>'
+            + '  <button onclick="loadModes()">🔄 Retry</button>'
+            + '</div>';
+        });
+    }
+
+    /* -- Render mode buttons -- */
+
+    function renderModes(modeList) {
+      var container = document.getElementById('modes');
+      var html = '';
+
+      modeList.forEach(function(mode) {
+        html += ''
+          + '<div class="mode-btn" id="btn-' + mode.id + '"'
+          + '     onclick="switchMode(\'' + mode.id + '\', \'' + (mode.name || mode.id) + '\')">'
+          + '  <div class="icon">' + (mode.icon || '🔘') + '</div>'
+          + '  <div class="name">' + (mode.name || mode.id) + '</div>'
+          + '  <div class="desc">' + (mode.description || '') + '</div>'
+          + '</div>';
+      });
+
+      container.innerHTML = html;
+    }
+
+    /* -- Highlight active mode -- */
+
+    function highlightActive(id) {
+      var btns = document.querySelectorAll('.mode-btn');
+      for (var i = 0; i < btns.length; i++) {
+        btns[i].classList.remove('active');
+      }
+      var el = document.getElementById('btn-' + id);
+      if (el) {
+        el.classList.add('active');
+      }
+    }
+
+    /* -- Switch mode -- */
+
+    function switchMode(id, name) {
+      console.log('[SSB] Switching to: ' + id);
+      setStatus('Switching to ' + name + '...', 'switching');
+
+      fetchWithTimeout(API_BASE + '/api/modes/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode_id: id })
+      })
+        .then(function(res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.json();
+        })
+        .then(function(data) {
+          console.log('[SSB] Switched OK:', data);
+          loadModes();
+        })
+        .catch(function(err) {
+          console.error('[SSB] Switch failed:', err);
+          setStatus('Switch failed: ' + err.message, 'error');
+        });
+    }
+
+    /* -- Initial load -- */
+    loadModes();
+  </script>
+</body>
+</html>
 FEHTML
-  success "Frontend scaffold created"
+  success "Frontend scaffold created (with timeout + error handling)"
 }
 
 setup_frontend() {
@@ -775,10 +1276,8 @@ setup_frontend() {
   generate_frontend_scaffold
   local fe="${INSTALL_DIR}/frontend"
   if [[ ! -f "${fe}/package.json" ]]; then
-    error "Frontend package.json missing"
-    exit 1
+    error "Frontend package.json missing"; exit 1
   fi
-  # Hash check — skip if unchanged
   local marker="${fe}/.build_hash"
   local cur_hash="none"
   if command_exists md5sum; then
@@ -797,8 +1296,7 @@ setup_frontend() {
     success "Frontend built"
   else
     spinner_stop
-    error "Frontend build failed"
-    exit 1
+    error "Frontend build failed"; exit 1
   fi
 }
 
@@ -812,7 +1310,6 @@ harden_security() {
     chmod 600 "${INSTALL_DIR}/.env" 2>/dev/null || true
   fi
   chmod 700 "${INSTALL_DIR}/config" 2>/dev/null || true
-  # .gitignore
   cat > "${INSTALL_DIR}/.gitignore" <<'GI'
 .env
 .env.*
@@ -830,14 +1327,12 @@ dist/
 *.pem
 *.key
 GI
-  # .env.example (safe template)
   if [[ -f "${INSTALL_DIR}/.env" ]]; then
     sed 's/=.*/=CHANGE_ME/' "${INSTALL_DIR}/.env" 2>/dev/null \
       | grep -v "^#" | sed '/^$/d' \
       > "${INSTALL_DIR}/.env.example" 2>/dev/null || true
     chmod 644 "${INSTALL_DIR}/.env.example" 2>/dev/null || true
   fi
-  # Pre-commit hook
   if [[ -d "${INSTALL_DIR}/.git" ]]; then
     mkdir -p "${INSTALL_DIR}/.git/hooks" 2>/dev/null || true
     cat > "${INSTALL_DIR}/.git/hooks/pre-commit" <<'HOOK'
@@ -852,14 +1347,16 @@ HOOK
 }
 
 # =============================================================================
-# Database — FIXED: uses temp file + if-guard (no set -e crash)
+# Database
 # =============================================================================
 
 init_database() {
   step "Initializing database"
   local db_path="${INSTALL_DIR}/data/smartswitch.db"
 
-  # Backup on upgrade
+  # Ensure data dir exists (FIX #4: redundant safety)
+  mkdir -p "${INSTALL_DIR}/data" 2>/dev/null || true
+
   if [[ -f "$db_path" && "$UPGRADE_MODE" == true ]]; then
     local db_bak="${INSTALL_DIR}/backups/smartswitch_${TIMESTAMP}.db"
     cp "$db_path" "$db_bak" 2>/dev/null || true
@@ -869,7 +1366,7 @@ init_database() {
 
   local seeded=false
 
-  # Method 1: sqlite3 CLI (safest — no native modules)
+  # Method 1: sqlite3 CLI
   if [[ "$seeded" == false ]] && command_exists sqlite3; then
     verbose "Trying sqlite3 CLI..."
     if sqlite3 "$db_path" 2>>"${ERROR_LOG:-/dev/null}" <<'SEEDSQL'
@@ -883,49 +1380,41 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO settings (key, value) VALUES ('app_version', '1.0.0');
+INSERT OR IGNORE INTO settings (key, value) VALUES ('app_version', '1.1.0');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('installed_at', datetime('now'));
 SEEDSQL
     then
       seeded=true
       verbose "Seeded via sqlite3"
-    else
-      verbose "sqlite3 method failed"
     fi
   fi
 
-  # Method 2: Node.js temp script with env vars (no argv issue)
+  # Method 2: Node.js temp script with env vars
   if [[ "$seeded" == false ]] && command_exists node \
      && [[ -d "${INSTALL_DIR}/backend/node_modules/better-sqlite3" ]]; then
     verbose "Trying node + better-sqlite3..."
     local tmp_js="${INSTALL_DIR}/data/.db_seed_tmp.js"
     cat > "$tmp_js" <<'SEEDJS'
 var path = require('path');
-var modDir = path.join(process.env.SSB_DIR, 'backend', 'node_modules', 'better-sqlite3');
-var Database = require(modDir);
+var Database = require(path.join(process.env.SSB_DIR, 'backend', 'node_modules', 'better-sqlite3'));
 var db = new Database(process.env.SSB_DBPATH);
 db.pragma('journal_mode = WAL');
 db.exec('CREATE TABLE IF NOT EXISTS mode_history (id INTEGER PRIMARY KEY AUTOINCREMENT, mode_id TEXT NOT NULL, switched_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
 db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
-db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('app_version', '1.0.0')");
+db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('app_version', '1.1.0')");
 db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('installed_at', datetime('now'))");
 db.close();
 SEEDJS
     if SSB_DIR="$INSTALL_DIR" SSB_DBPATH="$db_path" node "$tmp_js" 2>>"${ERROR_LOG:-/dev/null}"; then
       seeded=true
       verbose "Seeded via node"
-    else
-      verbose "Node method failed"
     fi
     rm -f "$tmp_js" 2>/dev/null || true
   fi
 
-  # Method 3: Let backend create tables on first start
   if [[ "$seeded" == false ]]; then
     info "DB will initialize on first app start (OK)"
   fi
-
-  # Secure permissions
   if [[ -f "$db_path" ]]; then
     chmod 600 "$db_path" 2>/dev/null || true
   fi
@@ -967,15 +1456,19 @@ check_port() {
 }
 
 # =============================================================================
-# Service
+# Service — FIX #3: removed ProtectSystem=strict, PrivateTmp, ProtectHome
 # =============================================================================
 
 generate_start_script() {
   cat > "${INSTALL_DIR}/start.sh" <<STARTEOF
 #!/bin/bash
-cd "\$(dirname "\$0")/backend"
-echo "Starting Smart Switch Brain on port \${PORT:-${PORT}}..."
-node src/index.js
+# Smart Switch Brain — start script
+export INSTALL_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+cd "\${INSTALL_DIR}/backend"
+echo "Starting Smart Switch Brain..."
+echo "  Root: \${INSTALL_DIR}"
+echo "  Port: \${PORT:-${PORT}}"
+exec node src/index.js
 STARTEOF
   cat > "${INSTALL_DIR}/stop.sh" <<'STOPEOF'
 #!/bin/bash
@@ -993,9 +1486,13 @@ create_systemd_unit() {
   local run_user
   run_user="$(id -un 2>/dev/null || echo root)"
   local tmp_unit="/tmp/${SERVICE_NAME}_${TIMESTAMP}.service"
+
+  # FIX #3: removed ProtectSystem=strict, ProtectHome=read-only, PrivateTmp=true
+  # These are too restrictive for dev/local deployment and cause path access errors
   cat > "$tmp_unit" <<UNITEOF
 [Unit]
 Description=Smart Switch Brain — OpenClaw AI Mode Selector
+Documentation=https://github.com/boybarley/smart-switch-brain
 After=network.target
 
 [Service]
@@ -1007,18 +1504,22 @@ Restart=on-failure
 RestartSec=10
 StandardOutput=append:${INSTALL_DIR}/logs/service.log
 StandardError=append:${INSTALL_DIR}/logs/service-error.log
+
+# Environment
 Environment=NODE_ENV=production
+Environment=INSTALL_DIR=${INSTALL_DIR}
 EnvironmentFile=${INSTALL_DIR}/.env
+
+# Reasonable limits
 LimitNOFILE=65536
+
+# Basic security (not overly restrictive)
 NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=${INSTALL_DIR}/data ${INSTALL_DIR}/logs
-PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
 UNITEOF
+
   if sudo cp "$tmp_unit" "$unit_file" 2>>"${ERROR_LOG:-/dev/null}" \
      && sudo chmod 644 "$unit_file" 2>>"${ERROR_LOG:-/dev/null}"; then
     rm -f "$tmp_unit" 2>/dev/null || true
@@ -1054,6 +1555,8 @@ register_service() {
       generate_start_script
     fi
   fi
+  # Always also generate start scripts as convenience
+  generate_start_script
 }
 
 # =============================================================================
@@ -1067,13 +1570,13 @@ run_smoke_tests() {
   fi
   step "Smoke tests"
   local pass=0 fail=0
-  # Node
+
   if node -e "process.exit(0)" 2>/dev/null; then
     success "Node runtime: OK"; pass=$((pass+1))
   else
     error "Node runtime: FAIL"; fail=$((fail+1))
   fi
-  # Directories
+
   local dirs_ok=true
   for d in backend frontend config logs data; do
     [[ -d "${INSTALL_DIR}/${d}" ]] || dirs_ok=false
@@ -1083,27 +1586,32 @@ run_smoke_tests() {
   else
     error "Directories: FAIL"; fail=$((fail+1))
   fi
-  # Config
+
   if [[ -f "${INSTALL_DIR}/.env" && -f "${INSTALL_DIR}/config/modes.yaml" ]]; then
-    success "Config files: OK"; pass=$((pass+1))
+    success "Config: OK"; pass=$((pass+1))
   else
-    error "Config files: FAIL"; fail=$((fail+1))
+    error "Config: FAIL"; fail=$((fail+1))
   fi
-  # API health
+
+  # Backend start + health check
   if [[ -f "${INSTALL_DIR}/backend/src/index.js" ]]; then
-    info "Starting service for health check..."
+    info "Starting service for health check (5s)..."
     local srv_pid=""
-    (cd "${INSTALL_DIR}/backend" && node src/index.js) &>/dev/null &
+    (cd "${INSTALL_DIR}/backend" && INSTALL_DIR="${INSTALL_DIR}" node src/index.js) &>/dev/null &
     srv_pid=$!
-    sleep 3
+    sleep 4
     if curl -sf "http://127.0.0.1:${PORT}/health" &>/dev/null; then
       success "API /health: OK"; pass=$((pass+1))
+      local health
+      health="$(curl -sf "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
+      verbose "Health response: ${health}"
     else
-      warn "API /health: no response"; fail=$((fail+1))
+      warn "API /health: no response (might need more startup time)"; fail=$((fail+1))
     fi
     kill "$srv_pid" 2>/dev/null || true
     wait "$srv_pid" 2>/dev/null || true
   fi
+
   info "Results: ${pass} passed, ${fail} failed"
   return 0
 }
@@ -1117,9 +1625,9 @@ run_diagnostic() {
   mkdir -p "${INSTALL_DIR}/logs" 2>/dev/null || true
   local rpt="${INSTALL_DIR}/logs/diagnostic_${TIMESTAMP}.txt"
   {
-    echo "=== Smart Switch Brain Diagnostic ==="
+    echo "=== Smart Switch Brain Diagnostic v${SCRIPT_VERSION} ==="
     echo "Date: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-    echo "By: Boy Barley"
+    echo "By:   Boy Barley"
     echo ""
     echo "--- OS ---"
     uname -a 2>/dev/null || echo "unknown"
@@ -1130,26 +1638,42 @@ run_diagnostic() {
     df -h "${INSTALL_DIR}" 2>/dev/null || df -h . 2>/dev/null || true
     echo ""
     echo "--- Tools ---"
-    echo "Node: $(node --version 2>/dev/null || echo N/A)"
-    echo "npm: $(npm --version 2>/dev/null || echo N/A)"
-    echo "git: $(git --version 2>/dev/null || echo N/A)"
+    echo "Node:    $(node --version 2>/dev/null || echo N/A)"
+    echo "npm:     $(npm --version 2>/dev/null || echo N/A)"
+    echo "git:     $(git --version 2>/dev/null || echo N/A)"
     echo "sqlite3: $(sqlite3 --version 2>/dev/null || echo N/A)"
-    echo "bash: ${BASH_VERSION:-unknown}"
+    echo "gcc:     $(gcc --version 2>&1 | head -1 || echo N/A)"
+    echo "make:    $(make --version 2>&1 | head -1 || echo N/A)"
+    echo "python3: $(python3 --version 2>/dev/null || echo N/A)"
+    echo "bash:    ${BASH_VERSION:-unknown}"
     echo ""
     echo "--- Installation ---"
-    echo "Dir: ${INSTALL_DIR}"
-    echo "Port: ${PORT}"
+    echo "Dir:    ${INSTALL_DIR}"
+    echo "Port:   ${PORT}"
+    echo "Script: v${SCRIPT_VERSION}"
     for d in backend frontend config logs data; do
       printf "  %-12s %s\n" "${d}/" "$(test -d "${INSTALL_DIR}/${d}" && echo OK || echo MISSING)"
     done
     printf "  %-12s %s\n" ".env" "$(test -f "${INSTALL_DIR}/.env" && echo OK || echo MISSING)"
     printf "  %-12s %s\n" "modes.yaml" "$(test -f "${INSTALL_DIR}/config/modes.yaml" && echo OK || echo MISSING)"
+    printf "  %-12s %s\n" "index.js" "$(test -f "${INSTALL_DIR}/backend/src/index.js" && echo OK || echo MISSING)"
+    printf "  %-12s %s\n" "node_modules" "$(test -d "${INSTALL_DIR}/backend/node_modules" && echo OK || echo MISSING)"
+    printf "  %-12s %s\n" "sqlite3.node" "$(test -f "${INSTALL_DIR}/backend/node_modules/better-sqlite3/build/Release/better_sqlite3.node" && echo OK || echo MISSING)"
+    echo ""
+    echo "--- .env contents (redacted) ---"
+    if [[ -f "${INSTALL_DIR}/.env" ]]; then
+      sed 's/\(API_KEY=\).*/\1[REDACTED]/' "${INSTALL_DIR}/.env" 2>/dev/null || echo "cannot read"
+    fi
     echo ""
     echo "--- Service ---"
     systemctl status "$SERVICE_NAME" 2>&1 || echo "Not registered"
     echo ""
-    echo "--- Errors (last 20) ---"
-    tail -20 "${INSTALL_DIR}/logs/service-error.log" 2>/dev/null || echo "No error log"
+    echo "--- Errors (last 30) ---"
+    tail -30 "${INSTALL_DIR}/logs/service-error.log" 2>/dev/null || echo "No error log"
+    echo ""
+    echo "--- Health Check ---"
+    curl -sf "http://127.0.0.1:${PORT}/health" 2>/dev/null || echo "Not responding"
+    echo ""
     echo "=== End ==="
   } > "$rpt" 2>&1
   chmod 600 "$rpt" 2>/dev/null || true
@@ -1158,24 +1682,22 @@ run_diagnostic() {
 }
 
 # =============================================================================
-# Status
+# Status / Uninstall / Clean
 # =============================================================================
 
 show_status() {
   step "Status"
   if [[ ! -d "$INSTALL_DIR" ]]; then error "Not installed at ${INSTALL_DIR}"; exit 1; fi
-  info "Dir: ${INSTALL_DIR}"
+  info "Dir:  ${INSTALL_DIR}"
   info "Port: ${PORT}"
+  info "Ver:  v${SCRIPT_VERSION}"
   if command_exists systemctl && systemctl is-active "$SERVICE_NAME" &>/dev/null; then
     success "Service: running (systemd)"
   else
     local pid
     pid="$(pgrep -f 'node.*src/index.js' 2>/dev/null | head -1 || true)"
-    if [[ -n "$pid" ]]; then
-      success "Service: running (PID ${pid})"
-    else
-      warn "Service: stopped"
-    fi
+    if [[ -n "$pid" ]]; then success "Service: running (PID ${pid})"
+    else warn "Service: stopped"; fi
   fi
   if curl -sf "http://127.0.0.1:${PORT}/health" 2>/dev/null; then
     echo ""
@@ -1184,10 +1706,6 @@ show_status() {
     warn "API: not responding"
   fi
 }
-
-# =============================================================================
-# Uninstall
-# =============================================================================
 
 run_uninstall() {
   step "Uninstalling Smart Switch Brain"
@@ -1220,10 +1738,6 @@ run_uninstall() {
   success "Uninstalled"
 }
 
-# =============================================================================
-# Clean
-# =============================================================================
-
 run_clean() {
   step "Cleaning artifacts"
   if [[ ! -d "$INSTALL_DIR" ]]; then error "Not found at ${INSTALL_DIR}"; exit 1; fi
@@ -1240,24 +1754,40 @@ run_clean() {
 
 generate_docs() {
   cat > "${INSTALL_DIR}/docs/README.md" <<DOCEOF
-# Smart Switch Brain — OpenClaw AI Mode Selector
-# Created by Boy Barley — github.com/boybarley
+# Smart Switch Brain v${SCRIPT_VERSION}
+## OpenClaw AI Mode Selector
+### Created by Boy Barley — github.com/boybarley
 
 ## Quick Start
   cd ${INSTALL_DIR} && ./start.sh
   # or: sudo systemctl start ${SERVICE_NAME}
 
 ## API
-  GET  /health             Health check
-  GET  /api/modes          List modes
-  GET  /api/modes/current  Current mode
+  GET  /health             Health check (includes debug info)
+  GET  /api/modes          List all modes
+  GET  /api/modes/current  Current active mode
   POST /api/modes/switch   Switch mode {"mode_id":"work-hard"}
+
+## Modes
+  work-hard     -> Claude Opus       -> Complex tasks
+  focus-serius  -> Claude Haiku      -> Structured work
+  relax         -> Step-3.5 Flash    -> Creative tasks
 
 ## Management
   ./install.sh --status
   ./install.sh --upgrade
   ./install.sh --diagnostic
   ./install.sh --uninstall
+
+## Troubleshooting
+  # Check logs:
+  cat ${INSTALL_DIR}/logs/service-error.log
+
+  # Test manually:
+  cd ${INSTALL_DIR}/backend && INSTALL_DIR=${INSTALL_DIR} node src/index.js
+
+  # Health check:
+  curl http://localhost:${PORT}/health | jq .
 
 Generated: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 DOCEOF
@@ -1273,7 +1803,7 @@ print_summary() {
   dur="$(elapsed_since "$INSTALL_START_TIME")"
   echo ""
   printf "%b%b══════════════════════════════════════════════════%b\n" "$BOLD" "$GREEN" "$RESET"
-  printf "%b%b  🎉 Smart Switch Brain — Installed Successfully %b\n" "$BOLD" "$GREEN" "$RESET"
+  printf "%b%b  🎉 Smart Switch Brain v%s — Installed!%b\n" "$BOLD" "$GREEN" "$SCRIPT_VERSION" "$RESET"
   printf "%b%b══════════════════════════════════════════════════%b\n" "$BOLD" "$GREEN" "$RESET"
   echo ""
   printf "  %bDir:%b      %s\n" "$BOLD" "$RESET" "$INSTALL_DIR"
@@ -1283,13 +1813,15 @@ print_summary() {
   printf "  %b%bStart:%b\n" "$BOLD" "$CYAN" "$RESET"
   if [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]]; then
     printf "    sudo systemctl start %s\n" "$SERVICE_NAME"
-  else
-    printf "    cd %s && ./start.sh\n" "$INSTALL_DIR"
   fi
+  printf "    cd %s && ./start.sh\n" "$INSTALL_DIR"
   echo ""
   printf "  %b%bAccess:%b\n" "$BOLD" "$CYAN" "$RESET"
   printf "    http://localhost:%s\n" "$PORT"
   printf "    http://localhost:%s/health\n" "$PORT"
+  echo ""
+  printf "  %b%bDebug:%b\n" "$BOLD" "$CYAN" "$RESET"
+  printf "    cd %s/backend && INSTALL_DIR=%s node src/index.js\n" "$INSTALL_DIR" "$INSTALL_DIR"
   echo ""
   printf "  %b%bManage:%b\n" "$BOLD" "$CYAN" "$RESET"
   printf "    %s --status | --upgrade | --diagnostic | --uninstall\n" "$SCRIPT_NAME"
@@ -1321,10 +1853,10 @@ main() {
 
   detect_os
 
-  if [[ "$STATUS_MODE"     == true ]]; then show_status;     exit 0; fi
-  if [[ "$DIAGNOSTIC_MODE" == true ]]; then run_diagnostic;  exit 0; fi
-  if [[ "$UNINSTALL_MODE"  == true ]]; then run_uninstall;   exit 0; fi
-  if [[ "$CLEAN_MODE"      == true ]]; then run_clean;       exit 0; fi
+  if [[ "$STATUS_MODE"     == true ]]; then show_status;    exit 0; fi
+  if [[ "$DIAGNOSTIC_MODE" == true ]]; then run_diagnostic; exit 0; fi
+  if [[ "$UNINSTALL_MODE"  == true ]]; then run_uninstall;  exit 0; fi
+  if [[ "$CLEAN_MODE"      == true ]]; then run_clean;      exit 0; fi
 
   validate_prereqs
   install_dependencies
@@ -1343,3 +1875,27 @@ main() {
 }
 
 main "$@"
+```
+
+---
+
+## Changelog v1.0.2 → v1.1.0
+
+| Fix | Masalah | Solusi |
+|-----|---------|-------|
+| **#1 Path Resolution** | `../../` relative paths gagal dari systemd | `process.env.INSTALL_DIR` → `path.resolve(__dirname, '../..')` → `/root/smart-switch-brain` (3-tier fallback). Semua path pakai `path.join(ROOT_DIR, ...)` |
+| **#2 Modes.yaml** | Error di-swallow, modes kosong tanpa clue | Cek `fs.existsSync` dulu, log path yang dicari, log setiap mode yang loaded, tampilkan `ROOT_DIR` di error message |
+| **#3 Systemd Security** | `ProtectSystem=strict` + `PrivateTmp=true` block akses file | Dihapus. Hanya keep `NoNewPrivileges=true`. Tambah `Environment=INSTALL_DIR=...` |
+| **#4 Auto-Create Dirs** | Data directory harus pre-exist | `fs.mkdirSync(dir, { recursive: true })` di `index.js` sebelum DB init. Juga `mkdir -p` di installer |
+| **#5 Build Tools** | `npm install` crash tanpa `gcc`/`make` | Auto-install `build-essential python3` (apt), `Development Tools` (yum), `base-devel` (pacman), Xcode CLI (brew) |
+| **#6 Frontend** | Minified HTML, stuck "Loading...", no debug | Full readable HTML/CSS, `fetchWithTimeout(5s)`, error box with retry button, `console.log('[SSB]')` everywhere, proper status classes |
+
+### Bonus improvements in v1.1.0
+
+- `.env` sekarang include `INSTALL_DIR` — auto-append ke existing `.env` saat upgrade
+- `/health` endpoint return `root_dir`, `modes_loaded`, `db_path` untuk debugging
+- `start.sh` auto-set `INSTALL_DIR` dari script location
+- `--diagnostic` report sekarang cek `better_sqlite3.node` binary, gcc, make, python3
+- `register_service` selalu generate `start.sh` + `stop.sh` (bahkan jika systemd aktif) sebagai backup
+- Backend log startup banner dengan semua path info
+- Frontend ada retry button saat API error
