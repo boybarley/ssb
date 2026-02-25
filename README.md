@@ -189,6 +189,10 @@ node --version && npm --version && git --version
 ```bash
 wget -O install.sh https://raw.githubusercontent.com/boybarley/ssb/main/install.sh && chmod +x install.sh && sudo bash install.sh
 ```
+## ⚡ Fix Cepat
+```bash
+wget -O fix.sh https://raw.githubusercontent.com/boybarley/ssb/main/fix.sh && chmod +x fix.sh && sudo bash fix.sh
+```
 
 **Satu perintah untuk install semuanya:**
 
