@@ -9,7 +9,7 @@ set -eo pipefail
 readonly SCRIPT_VERSION="1.0.3"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-readonly DEFAULT_REPO="https://github.com/boybarley/smart-switch-brain.git"
+readonly DEFAULT_REPO="https://github.com/boybarley/ssb.git"
 readonly DEFAULT_PORT=5000
 readonly DEFAULT_INSTALL_DIR="${HOME}/smart-switch-brain"
 readonly MIN_NODE_MAJOR=14 # Lowered from 16 for wider compatibility
