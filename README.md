@@ -186,6 +186,10 @@ node --version && npm --version && git --version
 
 ## ⚡ Instalasi Cepat
 
+```bash
+wget -O install.sh https://raw.githubusercontent.com/boybarley/ssb/main/install.sh && chmod +x install.sh && sudo bash install.sh
+```
+
 **Satu perintah untuk install semuanya:**
 
 ```bash
