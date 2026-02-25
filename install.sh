@@ -2,21 +2,22 @@
 set -eo pipefail
 
 # =============================================================================
-# Smart Switch Brain — OpenClaw AI Mode Selector Installer v1.0.3
+# Smart Switch Brain — OpenClaw AI Mode Selector Installer v1.0.4
 # Created by Boy Barley — https://github.com/boybarley
 # =============================================================================
 
-readonly SCRIPT_VERSION="1.0.3"
+readonly SCRIPT_VERSION="1.0.4"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+# Mengganti repository URL - karena tidak ada/tidak dapat diakses
 readonly DEFAULT_REPO="https://github.com/boybarley/ssb.git"
 readonly DEFAULT_PORT=5000
 readonly DEFAULT_INSTALL_DIR="${HOME}/smart-switch-brain"
-readonly MIN_NODE_MAJOR=14 # Lowered from 16 for wider compatibility
-readonly MIN_NPM_MAJOR=6   # Lowered from 8 for wider compatibility
-readonly MIN_GIT_VERSION="2.20" # Lowered from 2.30
-readonly MIN_RAM_MB=1024   # Lowered from 2048
-readonly MIN_DISK_MB=200   # Lowered from 500
+readonly MIN_NODE_MAJOR=14
+readonly MIN_NPM_MAJOR=6
+readonly MIN_GIT_VERSION="2.20"
+readonly MIN_RAM_MB=1024
+readonly MIN_DISK_MB=200
 readonly MAX_RETRIES=3
 readonly RETRY_DELAY=3
 readonly LOG_RETENTION=5
@@ -43,6 +44,8 @@ IS_ROOT=false
 ROLLBACK_STACK=()
 SPINNER_PID=""
 INSTALL_START_TIME=""
+# Flag to indicate whether we're installing from a repository clone or direct file generation
+FROM_REPO=false
 
 # =============================================================================
 # Colors
@@ -244,11 +247,12 @@ parse_args() {
       --uninstall)   UNINSTALL_MODE=true ;;
       --status)      STATUS_MODE=true ;;
       --diagnostic)  DIAGNOSTIC_MODE=true ;;
-      --api-key)     shift; API_KEY="${1:--}" ;;
+      --api-key)     shift; API_KEY="${1:-CHANGE_ME}" ;;
       --port)        shift; PORT="${1:-5000}" ;;
       --repo)        shift; REPO_URL="$(sanitize_input "${1:-$DEFAULT_REPO}")" ;;
       --dir)         shift; INSTALL_DIR="${1:-$DEFAULT_INSTALL_DIR}" ;;
-      *)             error "Unknown flag: $1"; exit 1 ;;
+      --skip-repo)   FROM_REPO=false ;;
+      *)             warn "Unknown flag: $1" ;;
     esac
     shift || break
   done
@@ -275,6 +279,7 @@ Flags:
   --uninstall         Remove installation
   --status            Show status
   --diagnostic        Generate diagnostic report
+  --skip-repo         Skip repository cloning
 EOF
 }
 
@@ -391,7 +396,6 @@ check_tool_version() {
 
 validate_prereqs() {
   step "Validating system requirements"
-  local failed=false
   
   check_ram || warn "RAM check failed - continuing"
   check_disk || warn "Disk space check failed - continuing"
@@ -403,8 +407,12 @@ validate_prereqs() {
   check_tool_version npm "${MIN_NPM_MAJOR}.0.0" "--version" || 
     warn "npm ${MIN_NPM_MAJOR}+ required - usually comes with Node.js"
   
-  check_tool_version git "$MIN_GIT_VERSION" "--version" || 
-    warn "git ${MIN_GIT_VERSION}+ required - install with package manager"
+  if [[ "$FROM_REPO" == true ]]; then
+    check_tool_version git "$MIN_GIT_VERSION" "--version" || {
+      warn "git ${MIN_GIT_VERSION}+ required for repository cloning - switching to direct installation"
+      FROM_REPO=false
+    }
+  fi
   
   # Only fail if node is completely missing (since it's essential)
   if ! command_exists node; then
@@ -453,11 +461,15 @@ install_dependencies() {
     fi
   done
   
-  # Git is required but don't fail if can't install
-  if ! command_exists git; then
-    pkg_install git || warn "Failed to install git - will create directory structure without cloning"
-  else
-    verbose "git: OK"
+  # Git is only required if we're using the repository
+  if [[ "$FROM_REPO" == true ]] && ! command_exists git; then
+    info "git is required for repository cloning"
+    if pkg_install git; then
+      success "git installed successfully"
+    else
+      warn "Failed to install git - switching to direct installation"
+      FROM_REPO=false
+    fi
   fi
   
   # Optional: sqlite3 for database init
@@ -494,6 +506,20 @@ create_base_repo_structure() {
   success "Base directory created"
 }
 
+test_repository_url() {
+  # Try to fetch the repository URL to see if it's valid
+  if command_exists git; then
+    if git ls-remote --quiet "$REPO_URL" HEAD &>/dev/null; then
+      return 0
+    else
+      return 1
+    fi
+  else
+    # If git isn't installed, we can't test
+    return 1
+  fi
+}
+
 manage_repository() {
   step "Managing repository"
   
@@ -505,6 +531,7 @@ manage_repository() {
   # Check if it's an existing git repo
   if [[ -d "${INSTALL_DIR}/.git" ]]; then
     info "Existing git repo at ${INSTALL_DIR}"
+    FROM_REPO=true
     if [[ "$UPGRADE_MODE" == true ]]; then
       backup_existing
       spinner_start "Pulling updates..."
@@ -515,23 +542,36 @@ manage_repository() {
     else
       info "Using existing repo (--upgrade to update)"
     fi
-  elif command_exists git; then
-    # Try to clone if git is available and directory doesn't exist as git repo
-    spinner_start "Cloning repository..."
-    push_rollback "rm -rf '${INSTALL_DIR}'"
-    if retry git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" 2>>"${ERROR_LOG:-/dev/null}"; then
-      pop_rollback
-      spinner_stop
-      success "Repository cloned"
+  elif [[ "$FROM_REPO" == true ]] && command_exists git; then
+    # Check if repo URL is valid
+    info "Testing repository URL: $REPO_URL"
+    if ! test_repository_url; then
+      warn "Repository URL $REPO_URL appears invalid or inaccessible"
+      info "Switching to direct file generation mode"
+      FROM_REPO=false
     else
-      pop_rollback
-      spinner_stop
-      warn "Clone failed - creating fresh structure"
-      create_base_repo_structure
+      # Try to clone
+      spinner_start "Cloning repository..."
+      push_rollback "rm -rf '${INSTALL_DIR}'"
+      if git clone --depth 1 "$REPO_URL" "$INSTALL_DIR" 2>>"${ERROR_LOG:-/dev/null}"; then
+        pop_rollback
+        spinner_stop
+        success "Repository cloned successfully"
+      else
+        pop_rollback
+        spinner_stop
+        warn "Failed to clone repository - switching to direct installation"
+        FROM_REPO=false
+      fi
     fi
   else
-    # If git not available, just create directory structure
-    info "Git not available - creating directory structure only"
+    # Not using repo mode
+    info "Using direct file generation (not git)"
+    FROM_REPO=false
+  fi
+  
+  # If not using repo, ensure the base structure exists
+  if [[ "$FROM_REPO" == false ]]; then
     create_base_repo_structure
   fi
 }
@@ -633,7 +673,7 @@ modes:
   - id: work-hard
     name: "Work Hard"
     description: "Maximum reasoning for complex tasks"
-    model: "anthropic/claude-opus-4"
+    model: "anthropic/claude-opus"
     provider: "openrouter"
     parameters:
       temperature: 0.3
@@ -657,7 +697,7 @@ modes:
   - id: relax
     name: "Relax"
     description: "Creative exploration"
-    model: "google/step-3.5-flash"
+    model: "mistralai/mistral-medium"
     provider: "openrouter"
     parameters:
       temperature: 0.7
@@ -901,14 +941,36 @@ setup_backend() {
   echo "update-notifier=false" >> "$npmrc_file"
   
   # Try to install dependencies
-  if (cd "$be" && npm install --no-fund --no-audit 2>>"${ERROR_LOG:-/dev/null}"); then
+  if (cd "$be" && npm install --no-fund --no-audit --loglevel=error 2>>"${ERROR_LOG:-/dev/null}"); then
     spinner_stop
     success "Backend dependencies installed"
   else
     spinner_stop
-    error "Backend npm install failed. Check logs: ${ERROR_LOG}"
-    warn "You may need to manually run: cd ${be} && npm install"
-    # Continue anyway
+    warn "NPM install encountered issues - trying again with basic dependencies"
+    
+    # Create a more minimal package.json with fewer dependencies
+    cat > "${be}/package.json" <<'PKG_MIN'
+{
+  "name": "smart-switch-brain-backend",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "^16.0.0"
+  }
+}
+PKG_MIN
+    
+    # Try with minimal dependencies
+    if (cd "$be" && npm install --no-fund --no-audit --loglevel=error 2>>"${ERROR_LOG:-/dev/null}"); then
+      success "Basic backend dependencies installed"
+    else
+      error "Backend npm install failed. Check logs: ${ERROR_LOG}"
+      warn "You may need to manually run: cd ${be} && npm install"
+    fi
   fi
   
   # Log rotation config
@@ -1654,6 +1716,10 @@ print_summary() {
 
 main() {
   INSTALL_START_TIME="$(date +%s)"
+  
+  # Default to generating files directly unless overridden
+  FROM_REPO=false
+  
   parse_args "$@"
 
   if [[ "$HELP_MODE" == true ]]; then show_help; exit 0; fi
