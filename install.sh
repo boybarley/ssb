@@ -1,18 +1,17 @@
-```bash
 #!/bin/bash
 set -euo pipefail
 IFS=$'\n\t'
 
 # =============================================================================
 # Smart Switch Brain — OpenClaw AI Mode Selector Installer
-# by Boy Barley
+# Created by Boy Barley — https://github.com/boybarley
 # =============================================================================
 
-readonly SCRIPT_VERSION="1.0.0"
+readonly SCRIPT_VERSION="1.0.1"
 readonly SCRIPT_NAME="$(basename "$0")"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-readonly DEFAULT_REPO="https://github.com/yourusername/smart-switch-brain.git"
+readonly DEFAULT_REPO="https://github.com/boybarley/smart-switch-brain.git"
 readonly DEFAULT_PORT=5000
 readonly DEFAULT_INSTALL_DIR="${HOME}/smart-switch-brain"
 readonly MIN_NODE_MAJOR=16
@@ -69,14 +68,12 @@ readonly ICO_INFO="ℹ️"; readonly ICO_CLEAN="🧹"; readonly ICO_DONE="🎉"
 # =============================================================================
 
 init_logging() {
-  # Create logs dir early; final location set after install dir is confirmed
   local log_dir="${INSTALL_DIR}/logs"
   mkdir -p "$log_dir" 2>/dev/null || { log_dir="/tmp/smart-switch-brain-logs"; mkdir -p "$log_dir"; }
   LOG_FILE="${log_dir}/install_${TIMESTAMP}.log"
   ERROR_LOG="${log_dir}/install_error_${TIMESTAMP}.log"
   touch "$LOG_FILE" "$ERROR_LOG"
   chmod 600 "$LOG_FILE" "$ERROR_LOG"
-  # Rotate old logs
   local count=0
   for f in $(ls -1t "${log_dir}"/install_*.log 2>/dev/null); do
     count=$((count + 1))
@@ -85,16 +82,16 @@ init_logging() {
 }
 
 log() {
-  # Write timestamped message to log file and optionally to stdout
   local level="$1"; shift
   local msg="$*"
   local ts; ts="$(date '+%Y-%m-%d %H:%M:%S')"
   echo "[$ts] [$level] $msg" >> "${LOG_FILE:-/dev/null}" 2>/dev/null || true
-  [[ "$level" == "ERROR" ]] && echo "[$ts] $msg" >> "${ERROR_LOG:-/dev/null}" 2>/dev/null || true
+  if [[ "$level" == "ERROR" ]]; then
+    echo "[$ts] $msg" >> "${ERROR_LOG:-/dev/null}" 2>/dev/null || true
+  fi
 }
 
 print_msg() {
-  # Print colored message to terminal and log it
   local color="$1" icon="$2"; shift 2
   local msg="$*"
   printf "%s %b%s%b\n" "$icon" "$color" "$msg" "$RESET"
@@ -106,14 +103,13 @@ success() { print_msg "$GREEN"  "$ICO_OK"   "$@"; }
 warn()    { print_msg "$YELLOW" "$ICO_WARN" "$@"; }
 error()   { print_msg "$RED"    "$ICO_ERR"  "$@"; }
 step()    { printf "\n%b%b── %s%b\n" "$BOLD" "$BLUE" "$*" "$RESET"; log "STEP" "$*"; }
-verbose() { [[ "$VERBOSE" == true ]] && info "$@" || log "DEBUG" "$@"; }
+verbose() { if [[ "$VERBOSE" == true ]]; then info "$@"; else log "DEBUG" "$@"; fi; }
 
 # =============================================================================
 # Spinner
 # =============================================================================
 
 spinner_start() {
-  # Start a background spinner for long-running tasks
   local msg="${1:-Working...}"
   if [[ -t 1 ]]; then
     (
@@ -131,7 +127,6 @@ spinner_start() {
 }
 
 spinner_stop() {
-  # Stop the background spinner
   if [[ -n "${SPINNER_PID:-}" ]]; then
     kill "$SPINNER_PID" 2>/dev/null || true
     wait "$SPINNER_PID" 2>/dev/null || true
@@ -145,7 +140,6 @@ spinner_stop() {
 # =============================================================================
 
 cleanup() {
-  # Trap handler: stop spinner, flush logs
   local exit_code=$?
   spinner_stop
   if [[ $exit_code -ne 0 && ${#ROLLBACK_STACK[@]} -gt 0 ]]; then
@@ -156,18 +150,16 @@ cleanup() {
       eval "$cmd" 2>/dev/null || warn "Rollback step failed: $cmd"
     done
   fi
-  [[ $exit_code -ne 0 ]] && error "Installation failed. See ${LOG_FILE:-/tmp/install.log} for details."
+  if [[ $exit_code -ne 0 ]]; then
+    error "Installation failed. See ${LOG_FILE:-/tmp/install.log} for details."
+  fi
   exit "$exit_code"
 }
 trap cleanup EXIT INT TERM
 
-push_rollback() {
-  # Register a rollback command to execute on failure
-  ROLLBACK_STACK+=("$1")
-}
+push_rollback() { ROLLBACK_STACK+=("$1"); }
 
 pop_rollback() {
-  # Remove last rollback command after successful step
   [[ ${#ROLLBACK_STACK[@]} -gt 0 ]] && unset 'ROLLBACK_STACK[${#ROLLBACK_STACK[@]}-1]'
 }
 
@@ -178,12 +170,10 @@ pop_rollback() {
 command_exists() { command -v "$1" &>/dev/null; }
 
 version_gte() {
-  # Return 0 if version $1 >= $2 using sort -V
   printf '%s\n%s' "$2" "$1" | sort -V -C 2>/dev/null
 }
 
 retry() {
-  # Retry a command up to MAX_RETRIES times with delay
   local attempt=1 cmd=("$@")
   while (( attempt <= MAX_RETRIES )); do
     if "${cmd[@]}"; then return 0; fi
@@ -196,9 +186,11 @@ retry() {
 }
 
 prompt_yn() {
-  # Prompt yes/no; returns 0 for yes, 1 for no
   local msg="$1" default="${2:-n}"
   local yn
+  if [[ ! -t 0 ]]; then
+    [[ "$default" == "y" ]] && return 0 || return 1
+  fi
   if [[ "$default" == "y" ]]; then
     read -rp "  $msg [Y/n]: " yn
     [[ -z "$yn" || "$yn" =~ ^[Yy] ]]
@@ -209,24 +201,21 @@ prompt_yn() {
 }
 
 elapsed_since() {
-  # Human-readable elapsed time since epoch timestamp $1
   local start="$1" now; now="$(date +%s)"
   local diff=$((now - start))
   printf "%dm %ds" $((diff / 60)) $((diff % 60))
 }
 
 secure_read() {
-  # Read sensitive input without echoing
   local prompt="$1" var_name="$2"
   local input=""
-  printf "  %s%s: %s" "$ICO_KEY" "$prompt" ""
+  printf "  %s %s: " "$ICO_KEY" "$prompt"
   read -rs input
   printf "\n"
   eval "$var_name=\$input"
 }
 
 sanitize_input() {
-  # Strip dangerous characters from user input
   local input="$1"
   echo "$input" | tr -cd '[:alnum:]._:/@-'
 }
@@ -270,6 +259,7 @@ parse_args() {
 show_help() {
   cat <<EOF
 ${BOLD}Smart Switch Brain — Installer v${SCRIPT_VERSION}${RESET}
+Created by Boy Barley — https://github.com/boybarley
 
 ${BOLD}Usage:${RESET}
   $SCRIPT_NAME [flags]
@@ -301,7 +291,6 @@ EOF
 # =============================================================================
 
 detect_os() {
-  # Detect operating system and package manager
   step "Detecting operating system"
   if [[ -f /etc/os-release ]]; then
     # shellcheck source=/dev/null
@@ -315,7 +304,8 @@ detect_os() {
         if command_exists apt-get; then OS_TYPE="debian"; PKG_MANAGER="apt"
         elif command_exists yum; then OS_TYPE="rhel"; PKG_MANAGER="yum"
         elif command_exists pacman; then OS_TYPE="arch"; PKG_MANAGER="pacman"
-        else warn "Unknown Linux distro: ${ID:-unknown}. Proceeding with best effort."; OS_TYPE="linux"; fi ;;
+        else warn "Unknown Linux distro: ${ID:-unknown}. Best effort."; OS_TYPE="linux"
+        fi ;;
     esac
   elif [[ "$(uname -s)" == "Darwin" ]]; then
     OS_TYPE="macos"; PKG_MANAGER="brew"
@@ -327,7 +317,7 @@ detect_os() {
     warn "Could not detect OS. Attempting best-effort install."
   fi
   [[ "$(id -u)" -eq 0 ]] && IS_ROOT=true
-  success "OS: ${OS_TYPE} | Package Manager: ${PKG_MANAGER:-none} | Root: ${IS_ROOT}"
+  success "OS: ${OS_TYPE} | Pkg: ${PKG_MANAGER:-none} | Root: ${IS_ROOT}"
 }
 
 # =============================================================================
@@ -335,7 +325,6 @@ detect_os() {
 # =============================================================================
 
 check_ram() {
-  # Validate minimum RAM
   local ram_mb=0
   if [[ "$OS_TYPE" == "macos" ]]; then
     ram_mb=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1048576 ))
@@ -350,7 +339,6 @@ check_ram() {
 }
 
 check_disk() {
-  # Validate minimum free disk space in target directory
   local target_parent; target_parent="$(dirname "$INSTALL_DIR")"
   mkdir -p "$target_parent" 2>/dev/null || true
   local avail_mb
@@ -368,13 +356,13 @@ check_disk() {
 }
 
 check_tool_version() {
-  # Validate tool exists and meets minimum version
-  local tool="$1" min_version="$2" version_flag="${3:---version}" extract="${4:-[0-9]+\.[0-9]+(\.[0-9]+)?}"
+  local tool="$1" min_version="$2" version_flag="${3:---version}"
+  local extract="${4:-[0-9]+\.[0-9]+(\.[0-9]+)?}"
   if ! command_exists "$tool"; then
     error "$tool is not installed."
     return 1
   fi
-  local raw_version; raw_version="$($tool $version_flag 2>&1 | head -1)"
+  local raw_version; raw_version="$("$tool" $version_flag 2>&1 | head -1)"
   local current; current="$(echo "$raw_version" | grep -oE "$extract" | head -1)"
   if [[ -z "$current" ]]; then
     warn "Could not determine $tool version. Proceeding."
@@ -388,13 +376,12 @@ check_tool_version() {
 }
 
 validate_prereqs() {
-  # Run all prerequisite checks
   step "Validating system requirements (~5s)"
   local failed=false
   check_ram   || failed=true
   check_disk  || failed=true
-  check_tool_version node "$MIN_NODE_MAJOR.0.0" "--version" '[0-9]+\.[0-9]+\.[0-9]+'  || failed=true
-  check_tool_version npm  "$MIN_NPM_MAJOR.0.0" "--version" '[0-9]+\.[0-9]+\.[0-9]+'   || failed=true
+  check_tool_version node "$MIN_NODE_MAJOR.0.0" "--version" '[0-9]+\.[0-9]+\.[0-9]+' || failed=true
+  check_tool_version npm  "$MIN_NPM_MAJOR.0.0" "--version" '[0-9]+\.[0-9]+\.[0-9]+' || failed=true
   check_tool_version git  "$MIN_GIT_VERSION"    "--version" '[0-9]+\.[0-9]+(\.[0-9]+)?' || failed=true
   if [[ "$failed" == true ]]; then
     error "Prerequisite checks failed. Install missing dependencies and retry."
@@ -407,21 +394,19 @@ validate_prereqs() {
 # =============================================================================
 
 pkg_install() {
-  # Install a system package using detected package manager
   local pkg="$1"
   if command_exists "$pkg"; then verbose "$pkg already installed"; return 0; fi
   info "Installing $pkg..."
   case "$PKG_MANAGER" in
-    apt)    sudo apt-get update -qq && sudo apt-get install -y -qq "$pkg" ;;
-    yum|dnf) sudo $PKG_MANAGER install -y -q "$pkg" ;;
-    pacman) sudo pacman -S --noconfirm --needed "$pkg" ;;
-    brew)   brew install "$pkg" ;;
-    *)      warn "Cannot auto-install $pkg. Please install manually."; return 1 ;;
+    apt)     sudo apt-get update -qq && sudo apt-get install -y -qq "$pkg" ;;
+    yum|dnf) sudo "$PKG_MANAGER" install -y -q "$pkg" ;;
+    pacman)  sudo pacman -S --noconfirm --needed "$pkg" ;;
+    brew)    brew install "$pkg" ;;
+    *)       warn "Cannot auto-install $pkg. Please install manually."; return 1 ;;
   esac
 }
 
 install_dependencies() {
-  # Ensure curl, wget, and git are available
   step "Checking base dependencies (~10s)"
   for dep in curl wget git; do
     if ! command_exists "$dep"; then
@@ -437,7 +422,6 @@ install_dependencies() {
 # =============================================================================
 
 backup_existing() {
-  # Create timestamped backup of current installation
   local backup_dir="${INSTALL_DIR}/backups/pre_upgrade_${TIMESTAMP}"
   info "Backing up existing installation to ${backup_dir}..."
   mkdir -p "$backup_dir"
@@ -448,7 +432,6 @@ backup_existing() {
 }
 
 verify_repo_integrity() {
-  # Verify the cloned repo is a valid git repository
   if [[ ! -d "${INSTALL_DIR}/.git" ]]; then
     warn "Not a git repository — skipping integrity check"
     return 0
@@ -461,7 +444,6 @@ verify_repo_integrity() {
 }
 
 manage_repository() {
-  # Clone or update the repository
   step "Managing repository (~30s)"
   if [[ -d "${INSTALL_DIR}/.git" ]]; then
     info "Existing installation detected at ${INSTALL_DIR}"
@@ -499,7 +481,6 @@ manage_repository() {
 # =============================================================================
 
 create_directories() {
-  # Create required project directories with secure permissions
   step "Creating directory structure"
   local dirs=(backend frontend config logs data backups docs)
   for dir in "${dirs[@]}"; do
@@ -519,16 +500,14 @@ create_directories() {
 # =============================================================================
 
 validate_api_key() {
-  # Basic format validation for OpenRouter API key
   local key="$1"
-  if [[ -z "$key" ]]; then return 1; fi
-  if [[ ${#key} -lt 10 ]]; then return 1; fi
-  if [[ "$key" =~ [[:space:]] ]]; then return 1; fi
+  [[ -z "$key" ]] && return 1
+  [[ ${#key} -lt 10 ]] && return 1
+  [[ "$key" =~ [[:space:]] ]] && return 1
   return 0
 }
 
 setup_env() {
-  # Generate .env configuration file
   local env_file="${INSTALL_DIR}/.env"
   if [[ -f "$env_file" && "$UPGRADE_MODE" == true ]]; then
     info "Existing .env found — preserving (backed up)"
@@ -552,7 +531,7 @@ setup_env() {
       attempts=$((attempts + 1))
     done
     if ! validate_api_key "$API_KEY"; then
-      warn "No valid API key provided. You can set it later in ${env_file}"
+      warn "No valid API key provided. Set it later in ${env_file}"
       API_KEY="CHANGE_ME"
     fi
   fi
@@ -586,7 +565,6 @@ ENVEOF
 }
 
 generate_modes_yaml() {
-  # Generate runtime AI routing mode configuration
   local modes_file="${INSTALL_DIR}/config/modes.yaml"
   if [[ -f "$modes_file" && "$UPGRADE_MODE" == true ]]; then
     info "Existing modes.yaml — preserving (backed up)"
@@ -599,9 +577,6 @@ generate_modes_yaml() {
   cat > "$modes_file" <<'YAMLEOF'
 # Smart Switch Brain — AI Mode Configuration
 # OpenClaw Runtime Mode Routing
-#
-# Each mode maps to an AI provider/model for different work contexts.
-# Edit freely — the installer will never overwrite without backup.
 
 modes:
   - id: work-hard
@@ -660,9 +635,8 @@ setup_configuration() {
 # =============================================================================
 
 generate_backend_scaffold() {
-  # Generate minimal backend if package.json is missing (fresh non-cloned install)
   local be_dir="${INSTALL_DIR}/backend"
-  if [[ -f "${be_dir}/package.json" ]]; then return 0; fi
+  [[ -f "${be_dir}/package.json" ]] && return 0
   info "Generating backend scaffold..."
   cat > "${be_dir}/package.json" <<'PKGEOF'
 {
@@ -689,6 +663,7 @@ generate_backend_scaffold() {
 }
 PKGEOF
   mkdir -p "${be_dir}/src"
+  # Write index.js using single-quoted heredoc to preserve all JS syntax
   cat > "${be_dir}/src/index.js" <<'JSEOF'
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 const express = require('express');
@@ -707,35 +682,59 @@ const app = express();
 app.use(helmet());
 app.use(cors());
 app.use(express.json());
-app.use(rateLimit({ windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000'), max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100') }));
+app.use(rateLimit({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000'),
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '100')
+}));
+
+// Serve frontend static files
+const distPath = path.resolve(__dirname, '../../frontend/dist');
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+}
 
 const modesPath = path.resolve(__dirname, '../../config/modes.yaml');
-const dbPath = path.resolve(__dirname, '../../data/smartswitch.db');
+const dbPath = path.resolve(__dirname, process.env.DATABASE_PATH || '../../data/smartswitch.db');
 
 let modes = { modes: [], defaults: {} };
-try { modes = yaml.parse(fs.readFileSync(modesPath, 'utf8')); } catch (e) { console.error('Failed to load modes.yaml:', e.message); }
+try {
+  modes = yaml.parse(fs.readFileSync(modesPath, 'utf8'));
+} catch (e) {
+  console.error('Failed to load modes.yaml:', e.message);
+}
 
 const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
-db.exec(`CREATE TABLE IF NOT EXISTS mode_history (id INTEGER PRIMARY KEY AUTOINCREMENT, mode_id TEXT NOT NULL, switched_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
-db.exec(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+db.exec('CREATE TABLE IF NOT EXISTS mode_history (id INTEGER PRIMARY KEY AUTOINCREMENT, mode_id TEXT NOT NULL, switched_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
+db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
 
-app.get('/health', (req, res) => res.json({ status: 'ok', version: '1.0.0', uptime: process.uptime() }));
-app.get('/api/modes', (req, res) => res.json(modes));
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', version: '1.0.0', uptime: process.uptime() });
+});
+
+app.get('/api/modes', (req, res) => {
+  res.json(modes);
+});
+
 app.get('/api/modes/current', (req, res) => {
   const row = db.prepare('SELECT mode_id FROM mode_history ORDER BY switched_at DESC LIMIT 1').get();
-  const current = row ? row.mode_id : modes.defaults?.fallback_mode || 'focus-serius';
-  const mode = (modes.modes || []).find(m => m.id === current) || {};
-  res.json({ current, ...mode });
+  const current = row ? row.mode_id : (modes.defaults && modes.defaults.fallback_mode) || 'focus-serius';
+  const mode = (modes.modes || []).find(function(m) { return m.id === current; }) || {};
+  res.json(Object.assign({ current: current }, mode));
 });
+
 app.post('/api/modes/switch', (req, res) => {
-  const { mode_id } = req.body;
-  if (!mode_id || !(modes.modes || []).find(m => m.id === mode_id)) return res.status(400).json({ error: 'Invalid mode_id' });
+  var mode_id = req.body.mode_id;
+  if (!mode_id) return res.status(400).json({ error: 'mode_id is required' });
+  var valid = (modes.modes || []).find(function(m) { return m.id === mode_id; });
+  if (!valid) return res.status(400).json({ error: 'Invalid mode_id' });
   db.prepare('INSERT INTO mode_history (mode_id) VALUES (?)').run(mode_id);
   res.json({ switched: mode_id, timestamp: new Date().toISOString() });
 });
 
-app.listen(PORT, HOST, () => console.log(`Smart Switch Brain running on ${HOST}:${PORT}`));
+app.listen(PORT, HOST, function() {
+  console.log('Smart Switch Brain running on ' + HOST + ':' + PORT);
+});
 JSEOF
   success "Backend scaffold generated"
 }
@@ -760,14 +759,14 @@ setup_backend() {
   if echo "$audit_output" | grep -qi "found 0 vulnerabilities"; then
     success "No vulnerabilities found"
   else
-    local vuln_count; vuln_count="$(echo "$audit_output" | grep -oiE '[0-9]+ vulnerabilit' | head -1 || echo "some")"
+    local vuln_count
+    vuln_count="$(echo "$audit_output" | grep -oiE '[0-9]+ vulnerabilit' | head -1 || echo "some")"
     warn "npm audit found ${vuln_count}ies — review with: cd ${be_dir} && npm audit"
   fi
   setup_log_rotation
 }
 
 setup_log_rotation() {
-  # Configure basic log rotation
   local logrotate_conf="${INSTALL_DIR}/config/logrotate.conf"
   cat > "$logrotate_conf" <<LREOF
 ${INSTALL_DIR}/logs/*.log {
@@ -790,9 +789,8 @@ LREOF
 # =============================================================================
 
 generate_frontend_scaffold() {
-  # Generate minimal frontend if package.json is missing
   local fe_dir="${INSTALL_DIR}/frontend"
-  if [[ -f "${fe_dir}/package.json" ]]; then return 0; fi
+  [[ -f "${fe_dir}/package.json" ]] && return 0
   info "Generating frontend scaffold..."
   cat > "${fe_dir}/package.json" <<'FEPKGEOF'
 {
@@ -811,26 +809,73 @@ FEPKGEOF
   cat > "${fe_dir}/public/index.html" <<'HTMLEOF'
 <!DOCTYPE html>
 <html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Smart Switch Brain</title>
 <style>
-*{margin:0;padding:0;box-sizing:border-box}body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f1117;color:#e1e4e8;display:flex;align-items:center;justify-content:center;min-height:100vh}
-.container{text-align:center;max-width:600px;padding:2rem}.title{font-size:2rem;margin-bottom:1rem}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0f1117;color:#e1e4e8;display:flex;align-items:center;justify-content:center;min-height:100vh}
+.container{text-align:center;max-width:600px;padding:2rem}
+.title{font-size:2rem;margin-bottom:1rem}
 .modes{display:flex;gap:1rem;flex-wrap:wrap;justify-content:center;margin-top:2rem}
-.mode-btn{padding:1.5rem 2rem;border:2px solid #30363d;border-radius:12px;background:#161b22;cursor:pointer;transition:all .2s;min-width:150px}
-.mode-btn:hover{border-color:#58a6ff;transform:translateY(-2px)}.mode-btn .icon{font-size:2rem}.mode-btn .label{margin-top:.5rem;font-size:.9rem;color:#8b949e}
+.mode-btn{padding:1.5rem 2rem;border:2px solid #30363d;border-radius:12px;background:#161b22;cursor:pointer;transition:all .2s;min-width:150px;color:#e1e4e8}
+.mode-btn:hover{border-color:#58a6ff;transform:translateY(-2px)}
+.mode-btn .icon{font-size:2rem}
+.mode-btn .label{margin-top:.5rem;font-size:.9rem;color:#8b949e}
+.mode-btn.active{border-color:#3fb950;box-shadow:0 0 12px rgba(63,185,80,0.3)}
 .status{margin-top:2rem;padding:1rem;border-radius:8px;background:#161b22;color:#58a6ff}
-</style></head>
-<body><div class="container"><h1 class="title">🧠 Smart Switch Brain</h1><p>OpenClaw AI Mode Selector</p>
-<div class="modes" id="modes"></div><div class="status" id="status">Loading...</div></div>
+.footer{margin-top:2rem;font-size:.75rem;color:#484f58}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1 class="title">🧠 Smart Switch Brain</h1>
+  <p>OpenClaw AI Mode Selector</p>
+  <div class="modes" id="modes"></div>
+  <div class="status" id="status">Loading...</div>
+  <div class="footer">Created by Boy Barley</div>
+</div>
 <script>
-const API=window.location.origin;
-async function load(){try{const r=await fetch(API+'/api/modes');const d=await r.json();const m=document.getElementById('modes');
-m.innerHTML=(d.modes||[]).map(x=>`<div class="mode-btn" onclick="sw('${x.id}')"><div class="icon">${x.icon||'🔘'}</div><div class="label">${x.name}</div></div>`).join('');
-const c=await(await fetch(API+'/api/modes/current')).json();document.getElementById('status').textContent='Current: '+(c.name||c.current);}catch(e){document.getElementById('status').textContent='API unavailable';}}
-async function sw(id){await fetch(API+'/api/modes/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode_id:id})});load();}
+var API = window.location.origin;
+
+function load() {
+  fetch(API + '/api/modes')
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var m = document.getElementById('modes');
+      var html = '';
+      (d.modes || []).forEach(function(x) {
+        html += '<div class="mode-btn" id="btn-' + x.id + '" onclick="sw(\'' + x.id + '\')">';
+        html += '<div class="icon">' + (x.icon || '🔘') + '</div>';
+        html += '<div class="label">' + x.name + '</div></div>';
+      });
+      m.innerHTML = html;
+      return fetch(API + '/api/modes/current');
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(c) {
+      document.getElementById('status').textContent = 'Current: ' + (c.name || c.current);
+      var active = document.getElementById('btn-' + c.current);
+      if (active) active.className = 'mode-btn active';
+    })
+    .catch(function() {
+      document.getElementById('status').textContent = 'API unavailable';
+    });
+}
+
+function sw(id) {
+  fetch(API + '/api/modes/switch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode_id: id })
+  }).then(function() { load(); });
+}
+
 load();
-</script></body></html>
+</script>
+</body>
+</html>
 HTMLEOF
   success "Frontend scaffold generated"
 }
@@ -843,8 +888,12 @@ setup_frontend() {
     error "Frontend package.json not found at ${fe_dir}"
     exit 1
   fi
+  # Check if rebuild is needed via content hash
   local build_marker="${fe_dir}/.build_hash"
-  local current_hash; current_hash="$(find "$fe_dir" -name '*.html' -o -name '*.js' -o -name '*.css' 2>/dev/null | sort | xargs cat 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "none")"
+  local current_hash
+  current_hash="$(find "$fe_dir" -maxdepth 2 \( -name '*.html' -o -name '*.js' -o -name '*.css' \) \
+    -not -path '*/node_modules/*' -not -path '*/dist/*' 2>/dev/null \
+    | sort | xargs cat 2>/dev/null | md5sum 2>/dev/null | cut -d' ' -f1 || echo "none")"
   if [[ -f "$build_marker" && "$(cat "$build_marker" 2>/dev/null)" == "$current_hash" && -d "${fe_dir}/dist" ]]; then
     info "Frontend unchanged — skipping rebuild"
     return 0
@@ -869,12 +918,10 @@ setup_frontend() {
 
 harden_security() {
   step "Applying security hardening"
-  # Secure .env
   [[ -f "${INSTALL_DIR}/.env" ]] && chmod 600 "${INSTALL_DIR}/.env"
   chmod 700 "${INSTALL_DIR}/config"
   # Generate .gitignore
   cat > "${INSTALL_DIR}/.gitignore" <<'GIEOF'
-# Security — prevent sensitive data from being committed
 .env
 .env.*
 !.env.example
@@ -892,9 +939,10 @@ dist/
 *.key
 *.cert
 GIEOF
-  # Create .env.example for safe sharing
+  # Create .env.example
   if [[ -f "${INSTALL_DIR}/.env" ]]; then
-    sed 's/=.*/=CHANGE_ME/' "${INSTALL_DIR}/.env" | grep -v "^#" | sed '/^$/d' > "${INSTALL_DIR}/.env.example" 2>/dev/null || true
+    sed 's/=.*/=CHANGE_ME/' "${INSTALL_DIR}/.env" | grep -v "^#" | sed '/^$/d' \
+      > "${INSTALL_DIR}/.env.example" 2>/dev/null || true
     chmod 644 "${INSTALL_DIR}/.env.example"
   fi
   # Pre-commit hook to block secrets
@@ -921,45 +969,40 @@ HOOKEOF
 init_database() {
   step "Initializing database (~5s)"
   local db_path="${INSTALL_DIR}/data/smartswitch.db"
+  # Backup existing DB on upgrade
   if [[ -f "$db_path" && "$UPGRADE_MODE" == true ]]; then
     local db_backup="${INSTALL_DIR}/backups/smartswitch_${TIMESTAMP}.db"
     cp "$db_path" "$db_backup"
     chmod 600 "$db_backup"
     success "Database backed up: ${db_backup}"
   fi
-  # Create and seed database via node
-  if command_exists node && [[ -d "${INSTALL_DIR}/backend/node_modules" ]]; then
-    node -e "
-const Database = require('${INSTALL_DIR}/backend/node_modules/better-sqlite3');
-const db = new Database('${db_path}');
+  # Initialize via node (no backticks — use regular strings for bash safety)
+  if command_exists node && [[ -d "${INSTALL_DIR}/backend/node_modules/better-sqlite3" ]]; then
+    node - "${INSTALL_DIR}" "${db_path}" <<'DBSCRIPT'
+var installDir = process.argv[1];
+var dbFile = process.argv[2];
+var Database = require(installDir + '/backend/node_modules/better-sqlite3');
+var db = new Database(dbFile);
 db.pragma('journal_mode = WAL');
-db.exec(\`
-  CREATE TABLE IF NOT EXISTS mode_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    mode_id TEXT NOT NULL,
-    switched_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('app_version', '1.0.0');
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('installed_at', datetime('now'));
-\`);
+db.exec('CREATE TABLE IF NOT EXISTS mode_history (id INTEGER PRIMARY KEY AUTOINCREMENT, mode_id TEXT NOT NULL, switched_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
+db.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)');
+db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('app_version', '1.0.0')");
+db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('installed_at', datetime('now'))");
 db.close();
-" 2>>"${ERROR_LOG}" || warn "Database seeding via node failed — will initialize on first run"
-  else
-    if command_exists sqlite3; then
-      sqlite3 "$db_path" <<'SQLEOF'
+console.log('Database initialized successfully');
+DBSCRIPT
+    if [[ $? -ne 0 ]]; then
+      warn "Database seeding via node failed — will initialize on first run"
+    fi
+  elif command_exists sqlite3; then
+    sqlite3 "$db_path" <<'SQLEOF'
 CREATE TABLE IF NOT EXISTS mode_history (id INTEGER PRIMARY KEY AUTOINCREMENT, mode_id TEXT NOT NULL, switched_at DATETIME DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
 INSERT OR IGNORE INTO settings (key, value) VALUES ('app_version', '1.0.0');
 INSERT OR IGNORE INTO settings (key, value) VALUES ('installed_at', datetime('now'));
 SQLEOF
-    else
-      info "Database will be initialized on first application start"
-    fi
+  else
+    info "Database will be initialized on first application start"
   fi
   [[ -f "$db_path" ]] && chmod 600 "$db_path"
   success "Database initialized"
@@ -971,36 +1014,39 @@ SQLEOF
 
 check_port() {
   step "Checking port availability"
+  local port_in_use=false
   if command_exists ss; then
-    if ss -tlnp 2>/dev/null | grep -q ":${PORT} "; then
-      warn "Port ${PORT} is already in use"
-      local alt=$((PORT + 1))
-      while ss -tlnp 2>/dev/null | grep -q ":${alt} " && [[ $alt -lt $((PORT + 100)) ]]; do
-        alt=$((alt + 1))
-      done
-      warn "Suggested alternative: ${alt}"
-      if [[ -t 0 ]] && prompt_yn "Use port ${alt} instead?" "y"; then
-        PORT=$alt
-        sed -i.bak "s/^PORT=.*/PORT=${PORT}/" "${INSTALL_DIR}/.env" 2>/dev/null || true
-        success "Port updated to ${PORT}"
-      fi
-    else
-      success "Port ${PORT} is available"
-    fi
+    ss -tlnp 2>/dev/null | grep -q ":${PORT} " && port_in_use=true
   elif command_exists lsof; then
-    if lsof -i ":${PORT}" -sTCP:LISTEN &>/dev/null; then
-      warn "Port ${PORT} appears to be in use. Adjust with --port flag."
-    else
-      success "Port ${PORT} is available"
-    fi
+    lsof -i ":${PORT}" -sTCP:LISTEN &>/dev/null && port_in_use=true
   elif command_exists netstat; then
-    if netstat -tlnp 2>/dev/null | grep -q ":${PORT} "; then
-      warn "Port ${PORT} appears to be in use."
-    else
-      success "Port ${PORT} is available"
-    fi
+    netstat -tlnp 2>/dev/null | grep -q ":${PORT} " && port_in_use=true
   else
     info "Cannot check port availability — proceeding with port ${PORT}"
+    return 0
+  fi
+  if [[ "$port_in_use" == true ]]; then
+    warn "Port ${PORT} is already in use"
+    local alt=$((PORT + 1))
+    while (( alt < PORT + 100 )); do
+      local alt_in_use=false
+      if command_exists ss; then
+        ss -tlnp 2>/dev/null | grep -q ":${alt} " && alt_in_use=true
+      elif command_exists lsof; then
+        lsof -i ":${alt}" -sTCP:LISTEN &>/dev/null && alt_in_use=true
+      fi
+      [[ "$alt_in_use" == false ]] && break
+      alt=$((alt + 1))
+    done
+    warn "Suggested alternative: ${alt}"
+    if [[ -t 0 ]] && prompt_yn "Use port ${alt} instead?" "y"; then
+      PORT=$alt
+      sed -i.bak "s/^PORT=.*/PORT=${PORT}/" "${INSTALL_DIR}/.env" 2>/dev/null || true
+      rm -f "${INSTALL_DIR}/.env.bak"
+      success "Port updated to ${PORT}"
+    fi
+  else
+    success "Port ${PORT} is available"
   fi
 }
 
@@ -1011,6 +1057,7 @@ check_port() {
 register_service() {
   if [[ "$NO_SYSTEMD" == true ]]; then
     info "Systemd registration skipped (--no-systemd)"
+    generate_start_script
     return 0
   fi
   step "Service registration"
@@ -1032,18 +1079,18 @@ register_service() {
 }
 
 create_systemd_unit() {
-  # Create and enable systemd service unit
   local unit_file="/etc/systemd/system/${SERVICE_NAME}.service"
   local node_path; node_path="$(which node)"
+  local run_user; run_user="$(whoami)"
   sudo tee "$unit_file" > /dev/null <<UNITEOF
 [Unit]
 Description=Smart Switch Brain — OpenClaw AI Mode Selector
 After=network.target
-Documentation=https://github.com/yourusername/smart-switch-brain
+Documentation=https://github.com/boybarley/smart-switch-brain
 
 [Service]
 Type=simple
-User=$(whoami)
+User=${run_user}
 WorkingDirectory=${INSTALL_DIR}/backend
 ExecStart=${node_path} src/index.js
 Restart=on-failure
@@ -1054,7 +1101,6 @@ Environment=NODE_ENV=production
 EnvironmentFile=${INSTALL_DIR}/.env
 LimitNOFILE=65536
 
-# Security hardening
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
@@ -1071,17 +1117,16 @@ UNITEOF
 }
 
 generate_start_script() {
-  # Generate helper scripts for manual start/stop
   cat > "${INSTALL_DIR}/start.sh" <<STARTEOF
 #!/bin/bash
 cd "\$(dirname "\$0")/backend"
 echo "Starting Smart Switch Brain on port \${PORT:-${PORT}}..."
 node src/index.js
 STARTEOF
-  cat > "${INSTALL_DIR}/stop.sh" <<STOPEOF
+  cat > "${INSTALL_DIR}/stop.sh" <<'STOPEOF'
 #!/bin/bash
 echo "Stopping Smart Switch Brain..."
-pkill -f "node.*smart-switch-brain.*index.js" 2>/dev/null && echo "Stopped." || echo "Not running."
+pkill -f "node.*src/index.js" 2>/dev/null && echo "Stopped." || echo "Not running."
 STOPEOF
   chmod 755 "${INSTALL_DIR}/start.sh" "${INSTALL_DIR}/stop.sh"
   success "Start/stop scripts generated"
@@ -1098,19 +1143,19 @@ run_smoke_tests() {
   fi
   step "Running smoke tests (~15s)"
   local passed=0 failed=0
-  # Test node
+  # Node test
   if node -e "process.exit(0)" 2>/dev/null; then
     success "Node.js runtime: OK"; passed=$((passed + 1))
   else
     error "Node.js runtime: FAIL"; failed=$((failed + 1))
   fi
-  # Test npm
+  # npm test
   if npm --version &>/dev/null; then
     success "npm: OK"; passed=$((passed + 1))
   else
     error "npm: FAIL"; failed=$((failed + 1))
   fi
-  # Test directories
+  # Directory test
   local dirs_ok=true
   for d in backend frontend config logs data backups docs; do
     [[ ! -d "${INSTALL_DIR}/${d}" ]] && dirs_ok=false
@@ -1120,31 +1165,33 @@ run_smoke_tests() {
   else
     error "Directory structure: FAIL"; failed=$((failed + 1))
   fi
-  # Test config
+  # Config test
   if [[ -f "${INSTALL_DIR}/.env" && -f "${INSTALL_DIR}/config/modes.yaml" ]]; then
     success "Configuration files: OK"; passed=$((passed + 1))
   else
     error "Configuration files: FAIL"; failed=$((failed + 1))
   fi
-  # Service start test
-  info "Starting service for quick health check..."
-  local be_dir="${INSTALL_DIR}/backend"
-  if [[ -f "${be_dir}/src/index.js" ]]; then
-    (cd "$be_dir" && timeout 10 node src/index.js &) 2>/dev/null
-    local svc_pid=$!
+  # API health test
+  if [[ -f "${INSTALL_DIR}/backend/src/index.js" ]]; then
+    info "Starting service for quick health check..."
+    local svc_pid=""
+    (cd "${INSTALL_DIR}/backend" && node src/index.js &>/dev/null) &
+    svc_pid=$!
     sleep 3
     if curl -sf "http://127.0.0.1:${PORT}/health" &>/dev/null; then
       success "API health check: OK"; passed=$((passed + 1))
     else
-      warn "API health check: Could not reach /health (may need dependency)"; failed=$((failed + 1))
+      warn "API health check: Could not reach /health"; failed=$((failed + 1))
     fi
-    kill "$svc_pid" 2>/dev/null; wait "$svc_pid" 2>/dev/null || true
+    kill "$svc_pid" 2>/dev/null || true
+    wait "$svc_pid" 2>/dev/null || true
   else
     warn "Backend entry point not found — skipping API test"
   fi
   echo ""
   info "Tests: ${passed} passed, ${failed} failed"
   [[ $failed -gt 0 ]] && warn "Some tests failed — review logs for details"
+  return 0
 }
 
 # =============================================================================
@@ -1154,10 +1201,12 @@ run_smoke_tests() {
 run_diagnostic() {
   step "Generating diagnostic report"
   local report="${INSTALL_DIR}/logs/diagnostic_${TIMESTAMP}.txt"
+  mkdir -p "${INSTALL_DIR}/logs" 2>/dev/null || true
   {
     echo "======================================"
     echo "Smart Switch Brain — Diagnostic Report"
     echo "Generated: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    echo "Created by: Boy Barley"
     echo "======================================"
     echo ""
     echo "--- System ---"
@@ -1207,7 +1256,6 @@ run_diagnostic() {
     tail -20 "${INSTALL_DIR}/logs/service-error.log" 2>/dev/null || echo "No error log found"
     echo ""
     echo "======================================"
-    echo "End of report"
   } > "$report" 2>&1
   chmod 600 "$report"
   success "Diagnostic report saved: ${report}"
@@ -1226,22 +1274,21 @@ show_status() {
   fi
   info "Installation: ${INSTALL_DIR}"
   info "Port: ${PORT}"
-  # Check service
   if command_exists systemctl && systemctl is-active "$SERVICE_NAME" &>/dev/null; then
-    success "Service: running"
+    success "Service: running (systemd)"
   else
-    local pid; pid="$(pgrep -f 'node.*smart-switch.*index.js' 2>/dev/null || true)"
+    local pid
+    pid="$(pgrep -f 'node.*src/index.js' 2>/dev/null | head -1 || true)"
     if [[ -n "$pid" ]]; then
       success "Service: running (PID: ${pid})"
     else
       warn "Service: not running"
     fi
   fi
-  # Check health
   if curl -sf "http://127.0.0.1:${PORT}/health" &>/dev/null; then
     success "API: healthy"
-    local resp; resp="$(curl -sf "http://127.0.0.1:${PORT}/health")"
-    info "Response: ${resp}"
+    curl -sf "http://127.0.0.1:${PORT}/health" 2>/dev/null
+    echo ""
   else
     warn "API: not responding on port ${PORT}"
   fi
@@ -1263,7 +1310,7 @@ run_uninstall() {
     info "Uninstall cancelled."
     exit 0
   fi
-  # Backup database
+  # Offer DB backup
   if [[ -f "${INSTALL_DIR}/data/smartswitch.db" ]]; then
     if prompt_yn "Backup database before removal?" "y"; then
       local db_backup="${HOME}/smartswitch_backup_${TIMESTAMP}.db"
@@ -1280,8 +1327,8 @@ run_uninstall() {
     sudo systemctl daemon-reload 2>/dev/null || true
     success "Systemd service removed"
   fi
-  pkill -f "node.*smart-switch.*index.js" 2>/dev/null || true
-  # Preserve user data option
+  pkill -f "node.*src/index.js" 2>/dev/null || true
+  # Preserve user data
   if prompt_yn "Preserve user data (config, data, backups)?" "y"; then
     local preserve_dir="${HOME}/smart-switch-brain-userdata_${TIMESTAMP}"
     mkdir -p "$preserve_dir"
@@ -1317,59 +1364,38 @@ run_clean() {
 # =============================================================================
 
 generate_docs() {
-  # Generate runtime documentation
   local docs_dir="${INSTALL_DIR}/docs"
   cat > "${docs_dir}/README.md" <<DOCEOF
 # Smart Switch Brain — OpenClaw AI Mode Selector
+# Created by Boy Barley — https://github.com/boybarley
 
 ## Quick Start
 
-\`\`\`bash
-# Start the service
-cd ${INSTALL_DIR}
-./start.sh
+    cd ${INSTALL_DIR}
+    ./start.sh
 
-# Or with systemd
-sudo systemctl start ${SERVICE_NAME}
-\`\`\`
+    # Or with systemd
+    sudo systemctl start ${SERVICE_NAME}
 
 ## API Endpoints
 
-| Method | Path                | Description           |
-|--------|---------------------|-----------------------|
-| GET    | /health             | Health check          |
-| GET    | /api/modes          | List available modes  |
-| GET    | /api/modes/current  | Get current mode      |
-| POST   | /api/modes/switch   | Switch AI mode        |
+  GET  /health             Health check
+  GET  /api/modes          List available modes
+  GET  /api/modes/current  Get current mode
+  POST /api/modes/switch   Switch AI mode (body: {"mode_id":"work-hard"})
 
 ## Modes
 
-| Mode         | Model              | Use Case        |
-|--------------|--------------------|-----------------| 
-| Work Hard    | Claude Opus        | Complex tasks   |
-| Focus Serius | Claude Haiku       | Structured work |
-| Relax        | Step-3.5 Flash     | Creative tasks  |
-
-## Configuration
-
-- \`.env\` — Environment variables (port, API key, etc.)
-- \`config/modes.yaml\` — AI routing mode definitions
+  Work Hard    -> Claude Opus       -> Complex tasks
+  Focus Serius -> Claude Haiku      -> Structured work
+  Relax        -> Step-3.5 Flash    -> Creative tasks
 
 ## Management
 
-\`\`\`bash
-# Check status
-$SCRIPT_NAME --status
-
-# Upgrade
-$SCRIPT_NAME --upgrade
-
-# Diagnostics
-$SCRIPT_NAME --diagnostic
-
-# Uninstall
-$SCRIPT_NAME --uninstall
-\`\`\`
+  ./install.sh --status       Check status
+  ./install.sh --upgrade      Upgrade
+  ./install.sh --diagnostic   Diagnostics
+  ./install.sh --uninstall    Uninstall
 
 Generated: $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 DOCEOF
@@ -1384,34 +1410,36 @@ DOCEOF
 print_summary() {
   local duration; duration="$(elapsed_since "$INSTALL_START_TIME")"
   echo ""
-  echo "${BOLD}${GREEN}══════════════════════════════════════════════════${RESET}"
-  echo "${BOLD}${GREEN} ${ICO_DONE} Smart Switch Brain — Installation Complete${RESET}"
-  echo "${BOLD}${GREEN}══════════════════════════════════════════════════${RESET}"
+  printf "%b%b══════════════════════════════════════════════════%b\n" "$BOLD" "$GREEN" "$RESET"
+  printf "%b%b  %s Smart Switch Brain — Installation Complete%b\n" "$BOLD" "$GREEN" "$ICO_DONE" "$RESET"
+  printf "%b%b══════════════════════════════════════════════════%b\n" "$BOLD" "$GREEN" "$RESET"
   echo ""
-  echo "  ${BOLD}Location:${RESET}   ${INSTALL_DIR}"
-  echo "  ${BOLD}Port:${RESET}       ${PORT}"
-  echo "  ${BOLD}Duration:${RESET}   ${duration}"
-  echo "  ${BOLD}Log:${RESET}        ${LOG_FILE}"
+  printf "  %bLocation:%b   %s\n" "$BOLD" "$RESET" "$INSTALL_DIR"
+  printf "  %bPort:%b       %s\n" "$BOLD" "$RESET" "$PORT"
+  printf "  %bDuration:%b   %s\n" "$BOLD" "$RESET" "$duration"
+  printf "  %bLog:%b        %s\n" "$BOLD" "$RESET" "$LOG_FILE"
   echo ""
-  echo "  ${BOLD}${CYAN}Quick Start:${RESET}"
+  printf "  %b%bQuick Start:%b\n" "$BOLD" "$CYAN" "$RESET"
   if command_exists systemctl && [[ "$NO_SYSTEMD" != true ]] && [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]]; then
-    echo "    sudo systemctl start ${SERVICE_NAME}"
+    printf "    sudo systemctl start %s\n" "$SERVICE_NAME"
   else
-    echo "    cd ${INSTALL_DIR} && ./start.sh"
+    printf "    cd %s && ./start.sh\n" "$INSTALL_DIR"
   fi
   echo ""
-  echo "  ${BOLD}${CYAN}Access:${RESET}"
-  echo "    Frontend:  http://localhost:${PORT}"
-  echo "    Health:    http://localhost:${PORT}/health"
-  echo "    API:       http://localhost:${PORT}/api/modes"
+  printf "  %b%bAccess:%b\n" "$BOLD" "$CYAN" "$RESET"
+  printf "    Frontend:  http://localhost:%s\n" "$PORT"
+  printf "    Health:    http://localhost:%s/health\n" "$PORT"
+  printf "    API:       http://localhost:%s/api/modes\n" "$PORT"
   echo ""
-  echo "  ${BOLD}${CYAN}Management:${RESET}"
-  echo "    Status:      ${SCRIPT_NAME} --status"
-  echo "    Upgrade:     ${SCRIPT_NAME} --upgrade"
-  echo "    Diagnostics: ${SCRIPT_NAME} --diagnostic"
-  echo "    Uninstall:   ${SCRIPT_NAME} --uninstall"
+  printf "  %b%bManagement:%b\n" "$BOLD" "$CYAN" "$RESET"
+  printf "    Status:      %s --status\n" "$SCRIPT_NAME"
+  printf "    Upgrade:     %s --upgrade\n" "$SCRIPT_NAME"
+  printf "    Diagnostics: %s --diagnostic\n" "$SCRIPT_NAME"
+  printf "    Uninstall:   %s --uninstall\n" "$SCRIPT_NAME"
   echo ""
-  echo "${GREEN}══════════════════════════════════════════════════${RESET}"
+  printf "%b══════════════════════════════════════════════════%b\n" "$GREEN" "$RESET"
+  printf "  Created by Boy Barley — https://github.com/boybarley\n"
+  printf "%b══════════════════════════════════════════════════%b\n" "$GREEN" "$RESET"
   log "INFO" "Installation completed in ${duration}"
 }
 
@@ -1423,32 +1451,28 @@ main() {
   INSTALL_START_TIME="$(date +%s)"
   parse_args "$@"
 
-  # Handle help early
   if [[ "$HELP_MODE" == true ]]; then show_help; exit 0; fi
 
-  # Initialize logging
   init_logging
   log "INFO" "Smart Switch Brain installer v${SCRIPT_VERSION} started"
   log "INFO" "Arguments: $*"
   log "INFO" "System: $(uname -a)"
 
   echo ""
-  echo "${BOLD}${CYAN}╔══════════════════════════════════════════════════╗${RESET}"
-  echo "${BOLD}${CYAN}║   🧠 Smart Switch Brain — Installer v${SCRIPT_VERSION}       ║${RESET}"
-  echo "${BOLD}${CYAN}║   OpenClaw AI Mode Selector                     ║${RESET}"
-  echo "${BOLD}${CYAN}╚══════════════════════════════════════════════════╝${RESET}"
+  printf "%b%b╔══════════════════════════════════════════════════╗%b\n" "$BOLD" "$CYAN" "$RESET"
+  printf "%b%b║   🧠 Smart Switch Brain — Installer v%-10s  ║%b\n" "$BOLD" "$CYAN" "$SCRIPT_VERSION" "$RESET"
+  printf "%b%b║   OpenClaw AI Mode Selector                     ║%b\n" "$BOLD" "$CYAN" "$RESET"
+  printf "%b%b║   by Boy Barley                                 ║%b\n" "$BOLD" "$CYAN" "$RESET"
+  printf "%b%b╚══════════════════════════════════════════════════╝%b\n" "$BOLD" "$CYAN" "$RESET"
   echo ""
 
-  # Detect OS early — needed for all modes
   detect_os
 
-  # Handle special modes
   if [[ "$STATUS_MODE" == true ]]; then show_status; exit 0; fi
   if [[ "$DIAGNOSTIC_MODE" == true ]]; then run_diagnostic; exit 0; fi
   if [[ "$UNINSTALL_MODE" == true ]]; then run_uninstall; exit 0; fi
   if [[ "$CLEAN_MODE" == true ]]; then run_clean; exit 0; fi
 
-  # Full installation flow
   validate_prereqs
   install_dependencies
   manage_repository
@@ -1466,4 +1490,3 @@ main() {
 }
 
 main "$@"
-```
