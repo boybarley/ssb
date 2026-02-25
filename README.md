@@ -189,14 +189,14 @@ node --version && npm --version && git --version
 **Satu perintah untuk install semuanya:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/boybarley/smart-switch-brain/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/boybarley/ssb/main/install.sh | bash
 ```
 
 Atau jika ingin lebih aman (download dulu, review, baru jalankan):
 
 ```bash
 # Download
-wget https://raw.githubusercontent.com/boybarley/smart-switch-brain/main/install.sh
+wget https://raw.githubusercontent.com/boybarley/ssb/main/install.sh
 
 # Review isinya (opsional tapi disarankan)
 less install.sh
@@ -213,7 +213,7 @@ chmod +x install.sh
 ### Langkah 1: Clone Repository
 
 ```bash
-git clone https://github.com/boybarley/smart-switch-brain.git
+git clone https://github.com/boybarley/ssb.git
 cd smart-switch-brain
 ```
 
