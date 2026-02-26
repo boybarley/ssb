@@ -3,7 +3,7 @@ set -eo pipefail
 
 # =============================================================================
 # Smart Switch Brain — OpenClaw AI Mode Selector Installer v1.0.4
-# Created by Boy Barley — https://github.com/boybarley
+# Created by Boy Barley — https://boybarley.com
 # =============================================================================
 
 readonly SCRIPT_VERSION="1.0.4"
