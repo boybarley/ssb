@@ -2,7 +2,7 @@
 set -eo pipefail
 
 # =============================================================================
-# Smart Switch Brain — OpenClaw AI Mode Selector Installer v1.0.4
+# Smart Switch Brain — OpenClaw AI Mode Selector Installer v1.0.0
 # Created by Boy Barley — https://boybarley.com
 # =============================================================================
 
@@ -1730,8 +1730,8 @@ main() {
 
   echo ""
   printf "%b%b╔══════════════════════════════════════════════╗%b\n" "$BOLD" "$CYAN" "$RESET"
-  printf "%b%b║  🧠 Smart Switch Brain  v%-20s║%b\n" "$BOLD" "$CYAN" "$SCRIPT_VERSION" "$RESET"
-  printf "%b%b║  OpenClaw AI Mode Selector — Boy Barley     ║%b\n" "$BOLD" "$CYAN" "$RESET"
+  printf "%b%b║  🧠 Smart Switch Brain  v%-20s               ║%b\n" "$BOLD" "$CYAN" "$SCRIPT_VERSION" "$RESET"
+  printf "%b%b║  OpenClaw AI Mode Selector — Boy Barley      ║%b\n" "$BOLD" "$CYAN" "$RESET"
   printf "%b%b╚══════════════════════════════════════════════╝%b\n" "$BOLD" "$CYAN" "$RESET"
   echo ""
 
